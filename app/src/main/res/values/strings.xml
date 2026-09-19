@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Lian+</string>
+    <string name="tab_chat">Chat</string>
+    <string name="tab_models">Models</string>
+    <string name="tab_images">Images</string>
+    <string name="tab_server">Server</string>
+    <string name="tab_settings">Settings</string>
+    <string name="tab_device">Device</string>
+</resources>

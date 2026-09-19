@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="tab_chat">محادثة</string>
+    <string name="tab_models">النماذج</string>
+    <string name="tab_images">الصور</string>
+    <string name="tab_server">الخادم</string>
+    <string name="tab_settings">الإعدادات</string>
+    <string name="tab_device">الجهاز</string>
+</resources>
