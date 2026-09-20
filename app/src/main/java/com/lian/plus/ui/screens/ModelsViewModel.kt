@@ -7,11 +7,13 @@ import com.lian.plus.core.LianRuntime
 import com.lian.plus.core.model.InstalledModel
 import com.lian.plus.core.model.ModelFit
 import com.lian.plus.core.model.ModelFitEvaluator
+import com.lian.plus.core.model.GgufRole
 import com.lian.plus.core.model.ModelKind
 import com.lian.plus.hub.CuratedCatalog
 import com.lian.plus.hub.CuratedModel
 import com.lian.plus.hub.DownloadCenter
 import com.lian.plus.hub.DownloadService
+import com.lian.plus.hub.HfAsset
 import com.lian.plus.hub.HfFile
 import com.lian.plus.hub.HfModelSummary
 import com.lian.plus.hub.HfRepoDetail
@@ -67,8 +69,8 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
     fun fitFor(sizeBytes: Long, kind: ModelKind): ModelFit =
         ModelFitEvaluator.evaluate(sizeBytes, kind, capability.value)
 
-    fun fitFor(file: HfFile, summary: HfModelSummary?): ModelFit =
-        fitFor(file.sizeBytes, kindFor(file, summary))
+    fun fitFor(asset: HfAsset, summary: HfModelSummary?): ModelFit =
+        fitFor(asset.totalBytes, kindFor(asset.primary, summary))
 
     /**
      * The curated list, unfiltered.
@@ -152,24 +154,31 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** The highest-quality quantisation that still fits comfortably. */
-    fun bestFileFor(detail: HfRepoDetail): HfFile? {
+    fun bestFileFor(detail: HfRepoDetail): HfAsset? {
         val budget = capability.value?.maxModelFileBytes ?: Long.MAX_VALUE
-        return detail.ggufFiles
-            .filter { it.sizeBytes in 1..budget }
-            .maxByOrNull { it.quant.quality * 1_000_000L + it.sizeBytes / 1024 }
-            ?: detail.ggufFiles.minByOrNull { it.sizeBytes }
+        val loadable = detail.assets.filter { it.role.isLoadable }
+        return loadable
+            .filter { it.totalBytes in 1..budget }
+            .maxByOrNull { it.quant.quality * 1_000_000L + it.totalBytes / 1024 }
+            ?: loadable.minByOrNull { it.totalBytes }
     }
 
     // ---- downloads -------------------------------------------------------
 
-    fun download(file: HfFile, kind: ModelKind) {
-        val fit = fitFor(file.sizeBytes, kind)
+    fun download(asset: HfAsset, kind: ModelKind) {
+        val fit = fitFor(asset.totalBytes, kind)
         if (!fit.isDownloadable) {
             _ui.value = _ui.value.copy(message = "${fit.headline}: ${fit.detail}")
             return
         }
-        DownloadService.enqueue(appContext, file, kind, runtime.modelStore.dirFor(kind))
-        _ui.value = _ui.value.copy(message = "Downloading ${file.fileName}…")
+        DownloadService.enqueue(appContext, asset, kind, runtime.modelStore.dirFor(kind))
+        _ui.value = _ui.value.copy(
+            message = if (asset.isSplit) {
+                "Downloading ${asset.files.size} parts of ${asset.displayName}…"
+            } else {
+                "Downloading ${asset.displayName}…"
+            },
+        )
     }
 
     fun downloadCurated(model: CuratedModel) {
@@ -181,14 +190,15 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.value = _ui.value.copy(message = "Could not reach ${model.repoId}")
                 return@launch
             }
-            val file = detail.ggufFiles
-                .firstOrNull { it.fileName.contains(model.preferredFileHint, ignoreCase = true) }
+            val asset = detail.assets
+                .filter { it.role.isLoadable }
+                .firstOrNull { it.displayName.contains(model.preferredFileHint, ignoreCase = true) }
                 ?: bestFileFor(detail)
-            if (file == null) {
-                _ui.value = _ui.value.copy(message = "No usable GGUF file in ${model.repoId}")
+            if (asset == null) {
+                _ui.value = _ui.value.copy(message = "No loadable GGUF model in ${model.repoId}")
                 return@launch
             }
-            download(file, model.kind)
+            download(asset, model.kind)
         }
     }
 
@@ -199,6 +209,13 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
     // ---- installed -------------------------------------------------------
 
     fun activate(model: InstalledModel) {
+        if (!model.role.isLoadable) {
+            _ui.value = _ui.value.copy(
+                message = "${model.displayName} is a ${model.role.label.lowercase()}. " +
+                    model.role.explanation,
+            )
+            return
+        }
         viewModelScope.launch {
             when (model.kind) {
                 ModelKind.TEXT -> runtime.loadTextModel(model).onFailure {

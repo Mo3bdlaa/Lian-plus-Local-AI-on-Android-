@@ -95,6 +95,13 @@ class LlmEngine {
         unloadLocked()
         val started = System.currentTimeMillis()
 
+        // Refuse before the engine does, with a reason. "llama.cpp could not
+        // load this file" tells the user nothing about a vision projector or a
+        // half-downloaded split.
+        rejectionReason(model, file)?.let {
+            return@withContext Result.failure(IllegalStateException(it))
+        }
+
         val mh = LlamaNative.loadModel(
             path = file.absolutePath,
             nGpuLayers = 0, // CPU-only build; see docs/ARCHITECTURE.md
@@ -103,7 +110,13 @@ class LlmEngine {
             progress = { fraction -> onProgress(fraction); true },
         )
         if (mh == 0L) {
-            return@withContext Result.failure(IllegalStateException("llama.cpp could not load this file"))
+            return@withContext Result.failure(
+                IllegalStateException(
+                    "The engine could not read ${file.name}. It may be truncated, or " +
+                        "use a quantisation this build does not support — check " +
+                        "logcat (tag LianNative) for the exact reason.",
+                ),
+            )
         }
         modelHandle = mh
 
@@ -157,6 +170,33 @@ class LlmEngine {
     }
 
     suspend fun unload() = withContext(nativeThread) { unloadLocked() }
+
+    /**
+     * Why this file cannot be loaded as a language model, or null if it can.
+     *
+     * The common case is a companion file — a vision projector, a draft head —
+     * downloaded from a model repository because it had the same extension.
+     */
+    private fun rejectionReason(model: InstalledModel, file: File): String? {
+        if (!model.role.isLoadable) {
+            return "${model.displayName} is a ${model.role.label.lowercase()}, not a " +
+                "language model. ${model.role.explanation}"
+        }
+        val info = GgufInspector.inspect(file)
+            ?: return "${file.name} is not a readable GGUF file. If the download was " +
+                "interrupted, delete it and fetch it again."
+        if ((info.blockCount ?: 0) <= 0) {
+            return "${file.name} contains no transformer layers, so there is nothing to " +
+                "run. It is most likely a companion file rather than a model."
+        }
+        info.splitCount?.let { count ->
+            if (count > 1 && !file.name.contains("-00001-of-")) {
+                return "${file.name} is one piece of a model split across $count files. " +
+                    "Download the whole set."
+            }
+        }
+        return null
+    }
 
     private fun unloadLocked() {
         if (contextHandle != 0L) {

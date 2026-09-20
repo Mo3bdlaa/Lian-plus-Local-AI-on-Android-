@@ -63,6 +63,11 @@ class ModelStore(private val context: Context) {
             append(file.name.substringBeforeLast('.'))
         }.take(180)
 
+        // The header has the last word. A file named like a model but carrying
+        // a clip architecture and no layers is a vision projector, and calling
+        // it a model only defers the failure to load time.
+        val role = GgufRoleDetector.roleFromMetadata(info, file.name)
+
         val model = InstalledModel(
             id = id,
             displayName = displayName
@@ -81,6 +86,7 @@ class ModelStore(private val context: Context) {
             contextTrained = info?.contextLength,
             embeddingDim = info?.embeddingLength,
             chatTemplate = info?.chatTemplate,
+            role = role,
             component = component,
         )
         dao.upsert(model.toEntity())
@@ -125,6 +131,22 @@ class ModelStore(private val context: Context) {
         }
     }
 
+    /**
+     * True once every shard of a split model sits beside [first].
+     *
+     * llama.cpp opens a split model through its first shard and finds the rest
+     * by name, so registering before they have all arrived produces a model
+     * that fails at load with nothing to explain why.
+     */
+    fun splitSetComplete(first: File): Boolean {
+        val total = GgufRoleDetector.shardTotal(first.name) ?: return true
+        val base = GgufRoleDetector.splitBaseName(first.name) ?: return true
+        val dir = first.parentFile ?: return false
+        return (1..total).all { index ->
+            File(dir, "%s-%05d-of-%05d.gguf".format(base, index, total)).exists()
+        }
+    }
+
     /** Total bytes taken by installed weights. */
     suspend fun diskUsage(): Long = withContext(Dispatchers.IO) {
         dao.all().sumOf { File(it.filePath).let { f -> if (f.exists()) f.length() else 0L } }
@@ -154,6 +176,7 @@ class ModelStore(private val context: Context) {
         contextTrained = contextTrained,
         embeddingDim = embeddingDim,
         chatTemplate = chatTemplate,
+        role = runCatching { GgufRole.valueOf(role) }.getOrDefault(GgufRole.STANDALONE),
         component = component?.let { runCatching { ImageComponent.valueOf(it) }.getOrNull() },
         addedAtMillis = addedAt,
     )
@@ -172,6 +195,7 @@ class ModelStore(private val context: Context) {
         contextTrained = contextTrained,
         embeddingDim = embeddingDim,
         chatTemplate = chatTemplate,
+        role = role.name,
         component = component?.name,
         addedAt = addedAtMillis,
     )

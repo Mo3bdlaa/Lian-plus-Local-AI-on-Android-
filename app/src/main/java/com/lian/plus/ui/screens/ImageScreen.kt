@@ -42,6 +42,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -65,6 +66,7 @@ import com.lian.plus.core.model.InstalledModel
 import com.lian.plus.core.model.ModelKind
 import com.lian.plus.data.db.GeneratedImageEntity
 import com.lian.plus.image.AspectRatio
+import com.lian.plus.image.NativeResolution
 import com.lian.plus.image.ImageEvent
 import com.lian.plus.image.ImageStyle
 import com.lian.plus.image.Sampler
@@ -293,7 +295,11 @@ fun ImageScreen(onBrowseModels: () -> Unit, vm: ImageViewModel = viewModel()) {
     var advanced by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
 
-    val baseSize = report?.recommendedImageSize ?: 512
+    // The device sets a ceiling, but the checkpoint sets the useful size: asking
+    // a 512-native model for 768 costs more than twice the time for a worse
+    // picture.
+    val deviceMax = report?.recommendedImageSize ?: 512
+    val baseSize = NativeResolution.cap(client.modelVersion, deviceMax)
     val (outW, outH) = ratio.dimensions(baseSize)
 
     Column(
@@ -410,7 +416,7 @@ fun ImageScreen(onBrowseModels: () -> Unit, vm: ImageViewModel = viewModel()) {
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text("Aspect ratio", style = MaterialTheme.typography.titleSmall, color = Lian.TextPrimary)
-            Text("$outW × $outH", style = MaterialTheme.typography.labelSmall, color = Lian.TextMuted)
+            Text("$outW × $outH", style = MaterialTheme.typography.labelSmall, color = Lian.Cyan)
         }
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -422,6 +428,16 @@ fun ImageScreen(onBrowseModels: () -> Unit, vm: ImageViewModel = viewModel()) {
                     modifier = Modifier.weight(1f),
                 )
             }
+        }
+        client.modelVersion?.takeIf { it.isNotBlank() }?.let { version ->
+            Spacer(Modifier.height(6.dp))
+            Text(
+                "$version · trained at ${NativeResolution.forVersion(version)}px. " +
+                    "Each step costs roughly the square of the side, so larger is " +
+                    "slower as well as worse.",
+                style = MaterialTheme.typography.labelSmall,
+                color = Lian.TextMuted,
+            )
         }
 
         Spacer(Modifier.height(16.dp))
@@ -499,10 +515,33 @@ fun ImageScreen(onBrowseModels: () -> Unit, vm: ImageViewModel = viewModel()) {
 
         Spacer(Modifier.height(18.dp))
         if (ui.generating) {
+            var elapsed by remember(ui.generating) { mutableStateOf(0) }
+            LaunchedEffect(ui.generating) {
+                while (true) {
+                    kotlinx.coroutines.delay(1000)
+                    elapsed += 1
+                }
+            }
             Text(
-                "Step ${ui.step} of ${ui.totalSteps}",
+                if (ui.step == 0) {
+                    "Preparing — ${elapsed}s"
+                } else {
+                    "Step ${ui.step} of ${ui.totalSteps} — ${elapsed}s"
+                },
                 style = MaterialTheme.typography.bodyMedium,
                 color = Lian.TextPrimary,
+            )
+            Text(
+                if (ui.step == 0) {
+                    "The first step loads the weights it needs, so it takes the longest. " +
+                        "At ${outW}px expect a minute or more per step on a phone."
+                } else {
+                    "%.0fs per step so far.".format(
+                        if (ui.step > 0) elapsed.toFloat() / ui.step else 0f,
+                    )
+                },
+                style = MaterialTheme.typography.labelSmall,
+                color = Lian.TextMuted,
             )
             LinearProgressIndicator(
                 progress = { if (ui.totalSteps > 0) ui.step.toFloat() / ui.totalSteps else 0f },

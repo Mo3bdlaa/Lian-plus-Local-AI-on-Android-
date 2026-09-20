@@ -201,12 +201,11 @@ Java_com_lian_plus_image_SdNative_txt2img(JNIEnv *env, jobject, jlong h,
     g.sample_params.guidance.txt_cfg     = cfg;
     g.sample_params.sample_method        = to_sample_method(sampleMethod);
     g.sample_params.scheduler            = to_scheduler(scheduler);
-    // Tiled VAE decoding keeps the decode step's peak allocation bounded; at
-    // 512-1024 px on a phone this is what stops the OOM killer firing.
-    g.vae_tiling_params.enabled        = true;
-    g.vae_tiling_params.tile_size_x    = 32;
-    g.vae_tiling_params.tile_size_y    = 32;
-    g.vae_tiling_params.target_overlap = 0.5f;
+    // Tiling is left to the library. sd_img_gen_params_init seeds it and
+    // backend_fit decides from the memory actually available, with a 256px
+    // tile. The hand-set 32px tile here was a mistake: it cut a 768px image
+    // into several hundred overlapping tiles, which made VAE decoding take
+    // longer than the diffusion steps it was meant to protect.
 
     // Optional img2img input (RGB, 3 bytes per pixel).
     std::vector<uint8_t> init_pixels;

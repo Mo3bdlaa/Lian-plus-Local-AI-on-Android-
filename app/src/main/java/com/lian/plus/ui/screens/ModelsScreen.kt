@@ -49,6 +49,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -61,7 +62,7 @@ import com.lian.plus.core.model.ModelKind
 import com.lian.plus.core.model.formatBytes
 import com.lian.plus.hub.CuratedModel
 import com.lian.plus.hub.DownloadStatus
-import com.lian.plus.hub.HfFile
+import com.lian.plus.hub.HfAsset
 import com.lian.plus.hub.HuggingFaceApi
 import com.lian.plus.ui.components.BrandCard
 import com.lian.plus.ui.components.BrandChip
@@ -210,7 +211,7 @@ fun ModelsScreen(vm: ModelsViewModel = viewModel()) {
             title = { Text(detail.summary.name, maxLines = 2, color = Lian.TextPrimary) },
             text = {
                 LazyColumn(Modifier.height(420.dp)) {
-                    if (detail.ggufFiles.isEmpty()) {
+                    if (detail.assets.isEmpty()) {
                         item {
                             Text(
                                 "This repository has no GGUF files, so none of the engines " +
@@ -219,13 +220,13 @@ fun ModelsScreen(vm: ModelsViewModel = viewModel()) {
                             )
                         }
                     }
-                    items(detail.ggufFiles, key = { it.path }) { file ->
-                        FileRow(
-                            file = file,
-                            fit = vm.fitFor(file, detail.summary),
-                            recommended = file == best,
+                    items(detail.assets, key = { it.displayName }) { asset ->
+                        AssetRow(
+                            asset = asset,
+                            fit = vm.fitFor(asset, detail.summary),
+                            recommended = asset == best,
                             onPick = {
-                                vm.download(file, vm.kindFor(file, detail.summary))
+                                vm.download(asset, vm.kindFor(asset.primary, detail.summary))
                                 vm.closeRepo()
                             },
                         )
@@ -466,13 +467,13 @@ private fun InstalledList(
                         )
                         Text(
                             buildString {
-                                append(kindLabel(model.kind))
+                                append(if (model.role.isLoadable) kindLabel(model.kind) else model.role.label)
                                 append(" · ").append(model.sizeLabel)
                                 append(" · ").append(model.quant.tag)
                                 model.contextTrained?.let { append(" · ${it / 1024}K ctx") }
                             },
                             style = MaterialTheme.typography.labelSmall,
-                            color = Lian.TextMuted,
+                            color = if (model.role.isLoadable) Lian.TextMuted else Color(0xFFFFB454),
                         )
                     }
                     IconButton(onClick = { onDelete(model) }) {
@@ -484,13 +485,24 @@ private fun InstalledList(
                         )
                     }
                 }
-                Spacer(Modifier.height(12.dp))
-                GradientButton(
-                    text = if (active) "Reload" else "Use this model",
-                    onClick = { onActivate(model) },
-                    leadingIcon = Icons.Default.PlayArrow,
-                    modifier = Modifier.fillMaxWidth(),
-                )
+                if (model.role.isLoadable) {
+                    Spacer(Modifier.height(12.dp))
+                    GradientButton(
+                        text = if (active) "Reload" else "Use this model",
+                        onClick = { onActivate(model) },
+                        leadingIcon = Icons.Default.PlayArrow,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                } else {
+                    // Downloaded, but nothing can load it. Say why here rather
+                    // than offering a button that only produces an error.
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        model.role.explanation,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Lian.TextMuted,
+                    )
+                }
             }
         }
 
@@ -576,16 +588,19 @@ private fun PicksList(
 }
 
 @Composable
-private fun FileRow(
-    file: HfFile,
+private fun AssetRow(
+    asset: HfAsset,
     fit: com.lian.plus.core.model.ModelFit,
     recommended: Boolean,
     onPick: () -> Unit,
 ) {
+    // A companion file is listed so the repository is not misrepresented, but
+    // it is not something to tap: downloading it only ends in a load error.
+    val selectable = asset.role.isLoadable && fit.isDownloadable
     Column(
         Modifier
             .fillMaxWidth()
-            .clickable(enabled = fit.isDownloadable, onClick = onPick)
+            .clickable(enabled = selectable, onClick = onPick)
             .padding(vertical = 10.dp),
     ) {
         Row(
@@ -595,24 +610,40 @@ private fun FileRow(
         ) {
             Column(Modifier.weight(1f)) {
                 Text(
-                    file.fileName,
+                    asset.displayName,
                     style = MaterialTheme.typography.bodyMedium,
-                    color = Lian.TextPrimary,
+                    color = if (selectable) Lian.TextPrimary else Lian.TextMuted,
                     fontWeight = if (recommended) FontWeight.Bold else FontWeight.Normal,
                 )
                 Text(
-                    formatBytes(file.sizeBytes) +
-                        if (recommended) " · best fit for this phone" else "",
+                    buildString {
+                        append(formatBytes(asset.totalBytes))
+                        if (asset.isSplit) append(" · ${asset.files.size} parts")
+                        if (recommended) append(" · best fit for this phone")
+                    },
                     style = MaterialTheme.typography.labelSmall,
                     color = if (recommended) Lian.Cyan else Lian.TextMuted,
                 )
             }
             Spacer(Modifier.width(8.dp))
-            FitBadge(fit)
+            if (asset.role.isLoadable) {
+                FitBadge(fit)
+            } else {
+                Text(
+                    asset.role.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Lian.TextMuted,
+                )
+            }
         }
-        if (fit.level != FitLevel.FITS) {
+        val note = when {
+            !asset.role.isLoadable -> asset.role.explanation
+            fit.level != FitLevel.FITS -> fit.detail
+            else -> null
+        }
+        note?.let {
             Text(
-                fit.detail,
+                it,
                 style = MaterialTheme.typography.labelSmall,
                 color = Lian.TextMuted,
                 modifier = Modifier.padding(top = 4.dp),

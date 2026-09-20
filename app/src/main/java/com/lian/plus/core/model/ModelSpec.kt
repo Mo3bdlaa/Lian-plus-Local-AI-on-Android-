@@ -68,6 +68,8 @@ data class InstalledModel(
     val contextTrained: Int?,
     val embeddingDim: Int?,
     val chatTemplate: String?,
+    /** What the file is: a model, or a companion that cannot load on its own. */
+    val role: GgufRole = GgufRole.STANDALONE,
     val component: ImageComponent? = null,
     val addedAtMillis: Long = System.currentTimeMillis(),
 ) {

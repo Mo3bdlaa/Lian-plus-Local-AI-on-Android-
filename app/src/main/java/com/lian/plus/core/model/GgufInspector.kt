@@ -43,6 +43,8 @@ object GgufInspector {
         val ropeFreqBase: Float?,
         val chatTemplate: String?,
         val vocabSize: Int?,
+        /** `split.count` — present only on the shards of a split model. */
+        val splitCount: Int?,
         val metadata: Map<String, String>,
     ) {
         /**
@@ -127,6 +129,7 @@ object GgufInspector {
             chatTemplate = kv["tokenizer.chat_template"] as? String,
             vocabSize = (kv["tokenizer.ggml.tokens"] as? List<*>)?.size
                 ?: intFor("vocab_size"),
+            splitCount = (kv["split.count"] as? Number)?.toInt(),
             metadata = displayMeta,
         )
     }

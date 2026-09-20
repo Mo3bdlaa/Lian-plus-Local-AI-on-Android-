@@ -1,5 +1,7 @@
 package com.lian.plus.hub
 
+import com.lian.plus.core.model.GgufRole
+import com.lian.plus.core.model.GgufRoleDetector
 import com.lian.plus.core.model.Quant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -75,9 +77,28 @@ data class HubQuery(
     val limit: Int = 30,
 )
 
+/**
+ * One downloadable thing in a repository.
+ *
+ * A split model is several files that are useless apart, so the unit the user
+ * picks is the set, not a file. Grouping them here is what stops the app
+ * downloading shard 1 of 9 and then reporting that llama.cpp cannot read it.
+ */
+data class HfAsset(
+    val repoId: String,
+    val displayName: String,
+    val files: List<HfFile>,
+    val totalBytes: Long,
+    val quant: Quant,
+    val role: GgufRole,
+) {
+    val isSplit: Boolean get() = files.size > 1
+    val primary: HfFile get() = files.first()
+}
+
 data class HfRepoDetail(
     val summary: HfModelSummary,
-    val ggufFiles: List<HfFile>,
+    val assets: List<HfAsset>,
     val otherFiles: List<HfFile>,
 )
 
@@ -141,14 +162,49 @@ class HuggingFaceApi(
             .filter { it.type == "file" }
             .map { HfFile(repoId, it.path, it.realSize, Quant.fromFileName(it.path)) }
 
+        val gguf = files.filter { it.path.endsWith(".gguf", ignoreCase = true) }
+
+        // Shards of one model collapse into a single asset carrying every part;
+        // everything else is an asset of one.
+        val (shards, singles) = gguf.partition { it.isSplitShard }
+        val splitAssets = shards
+            .groupBy { GgufRoleDetector.splitBaseName(it.fileName) ?: it.fileName }
+            .map { (base, parts) ->
+                val ordered = parts.sortedBy { it.fileName }
+                val expected = GgufRoleDetector.shardTotal(ordered.first().fileName)
+                HfAsset(
+                    repoId = repoId,
+                    displayName = base,
+                    files = ordered,
+                    totalBytes = ordered.sumOf { it.sizeBytes },
+                    quant = Quant.fromFileName(base),
+                    // An incomplete set on the Hub itself is still unusable, so
+                    // say so rather than letting it look like a normal model.
+                    role = if (expected != null && ordered.size < expected) {
+                        GgufRole.SHARD
+                    } else {
+                        GgufRole.STANDALONE
+                    },
+                )
+            }
+
+        val singleAssets = singles.map { file ->
+            HfAsset(
+                repoId = repoId,
+                displayName = file.fileName,
+                files = listOf(file),
+                totalBytes = file.sizeBytes,
+                quant = file.quant,
+                role = GgufRoleDetector.roleFromName(file.fileName),
+            )
+        }
+
         HfRepoDetail(
             summary = summary,
-            ggufFiles = files
-                .filter { it.path.endsWith(".gguf", ignoreCase = true) }
-                // A split model is represented by its first shard only; the
-                // downloader pulls the rest.
-                .filter { !it.isSplitShard || it.isFirstShard }
-                .sortedBy { it.sizeBytes },
+            // Loadable models first, then the companions, each by size.
+            assets = (splitAssets + singleAssets).sortedWith(
+                compareByDescending<HfAsset> { it.role.isLoadable }.thenBy { it.totalBytes },
+            ),
             otherFiles = files.filterNot { it.path.endsWith(".gguf", ignoreCase = true) },
         )
     }

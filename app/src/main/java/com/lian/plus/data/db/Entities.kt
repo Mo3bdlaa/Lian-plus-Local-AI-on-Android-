@@ -62,6 +62,7 @@ data class ModelEntity(
     val contextTrained: Int?,
     val embeddingDim: Int?,
     val chatTemplate: String?,
+    val role: String = "STANDALONE",
     val component: String?,
     val addedAt: Long = System.currentTimeMillis(),
     val lastUsedAt: Long? = null,

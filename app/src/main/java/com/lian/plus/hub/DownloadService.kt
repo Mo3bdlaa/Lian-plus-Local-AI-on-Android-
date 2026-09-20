@@ -112,9 +112,15 @@ class DownloadService : LifecycleService() {
                     }
 
                     is DownloadEvent.Done -> {
-                        runCatching {
-                            runtime.modelStore.register(event.file, job.kind, job.repoId)
-                        }.onFailure { Log.w(TAG, "could not register ${event.file.name}", it) }
+                        // A shard on its own is not a model: hold registration
+                        // until the whole set has landed, then register through
+                        // the first shard, which is how llama.cpp opens a split.
+                        val first = firstShardOf(event.file)
+                        if (runtime.modelStore.splitSetComplete(first)) {
+                            runCatching {
+                                runtime.modelStore.register(first, job.kind, job.repoId)
+                            }.onFailure { Log.w(TAG, "could not register ${first.name}", it) }
+                        }
 
                         DownloadCenter.update(id) {
                             it.copy(status = DownloadStatus.DONE, doneBytes = it.totalBytes)
@@ -137,6 +143,15 @@ class DownloadService : LifecycleService() {
             currentId = null
             startNextQueued()
         }
+    }
+
+    /** Maps any shard to shard one of its set, or returns the file unchanged. */
+    private fun firstShardOf(file: File): File {
+        val base = com.lian.plus.core.model.GgufRoleDetector.splitBaseName(file.name)
+            ?: return file
+        val total = com.lian.plus.core.model.GgufRoleDetector.shardTotal(file.name)
+            ?: return file
+        return File(file.parentFile, "%s-%05d-of-%05d.gguf".format(base, 1, total))
     }
 
     /** Stops the transfer but keeps the partial file, so resuming is cheap. */
@@ -252,21 +267,30 @@ class DownloadService : LifecycleService() {
         const val ACTION_CANCEL = "com.lian.plus.DOWNLOAD_CANCEL"
         const val EXTRA_ID = "download_id"
 
-        /** Queues [file] and starts the service. */
-        fun enqueue(context: Context, file: HfFile, kind: ModelKind, targetDir: File) {
-            val id = DownloadCenter.idFor(file.repoId, file.fileName)
-            DownloadCenter.enqueue(
-                DownloadJob(
-                    id = id,
-                    url = file.downloadUrl,
-                    fileName = file.fileName,
-                    repoId = file.repoId,
-                    kind = kind,
-                    targetPath = File(targetDir, file.fileName).absolutePath,
-                    totalBytes = file.sizeBytes,
-                ),
-            )
-            start(context, id)
+        /**
+         * Queues every file of [asset].
+         *
+         * A split model is several files, and the previous version queued only
+         * the first — which downloaded happily and then failed to load, because
+         * the other eight shards were never fetched.
+         */
+        fun enqueue(context: Context, asset: HfAsset, kind: ModelKind, targetDir: File) {
+            asset.files.forEach { file ->
+                DownloadCenter.enqueue(
+                    DownloadJob(
+                        id = DownloadCenter.idFor(file.repoId, file.fileName),
+                        url = file.downloadUrl,
+                        fileName = file.fileName,
+                        repoId = file.repoId,
+                        kind = kind,
+                        targetPath = File(targetDir, file.fileName).absolutePath,
+                        totalBytes = file.sizeBytes,
+                    ),
+                )
+            }
+            asset.files.firstOrNull()?.let {
+                start(context, DownloadCenter.idFor(it.repoId, it.fileName))
+            }
         }
 
         fun start(context: Context, id: String) {

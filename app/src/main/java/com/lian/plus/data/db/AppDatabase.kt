@@ -4,6 +4,8 @@ import android.content.Context
 import androidx.room.Database
 import androidx.room.Room
 import androidx.room.RoomDatabase
+import androidx.room.migration.Migration
+import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [
@@ -15,7 +17,7 @@ import androidx.room.RoomDatabase
         MemoryEntity::class,
         GeneratedImageEntity::class,
     ],
-    version = 1,
+    version = 2,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -27,6 +29,21 @@ abstract class AppDatabase : RoomDatabase() {
     abstract fun images(): ImageDao
 
     companion object {
+        /**
+         * Adds `role` to installed_models.
+         *
+         * A real migration rather than a destructive fallback: chat history is
+         * the user's, and a schema change is no reason to take it.
+         */
+        private val MIGRATION_1_2 = object : Migration(1, 2) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    "ALTER TABLE installed_models ADD COLUMN role TEXT NOT NULL " +
+                        "DEFAULT 'STANDALONE'",
+                )
+            }
+        }
+
         @Volatile private var instance: AppDatabase? = null
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
@@ -35,9 +52,7 @@ abstract class AppDatabase : RoomDatabase() {
                 AppDatabase::class.java,
                 "lian.db",
             )
-                // There is only one schema version so far; when that changes,
-                // real migrations go here rather than a destructive fallback -
-                // chat history is the user's, not ours to throw away.
+                .addMigrations(MIGRATION_1_2)
                 .build()
                 .also { instance = it }
         }
