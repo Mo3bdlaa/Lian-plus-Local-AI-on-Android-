@@ -1,4 +1,13 @@
-# Lian+ — local AI on Android
+<div align="center">
+
+<img src="brand/icon-512.png" width="128" alt="Lian+">
+
+# Lian+
+
+**Local AI. Limitless You.**
+
+</div>
+
 
 An Android app that downloads, serves and runs language and image models **entirely
 on the phone**. No account, no API key, no inference server. It reads the device's
@@ -48,7 +57,10 @@ local network, behind an API key.
 
 ---
 
-## Getting started
+## Install
+
+Grab the APK from [Releases](https://github.com/Mo3bdlaa/Lian-plus-Local-AI-on-Android-/releases),
+or build it yourself:
 
 ```bash
 git clone --recurse-submodules https://github.com/Mo3bdlaa/Lian-plus-Local-AI-on-Android-

@@ -1,5 +1,6 @@
 package com.lian.plus.ui.screens
 
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -33,6 +34,7 @@ import androidx.compose.ui.unit.dp
 import com.lian.plus.core.LianRuntime
 import com.lian.plus.data.AppSettings
 import com.lian.plus.server.ServerService
+import com.lian.plus.ui.theme.Lian
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
@@ -41,7 +43,7 @@ import kotlinx.coroutines.launch
  * device — or, if the user opts in, on the same network — can call.
  */
 @Composable
-fun ServerScreen() {
+fun ServerScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val runtime = remember { LianRuntime.get(context) }
     val settings by runtime.settingsStore.settings
@@ -58,8 +60,9 @@ fun ServerScreen() {
     } else "127.0.0.1"
     val baseUrl = "http://$host:${settings.serverPort}/v1"
 
+    Column(Modifier.fillMaxSize().background(Lian.Background)) {
+    LianTopBar(title = "Local API server", onBack = onBack)
     Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(16.dp)) {
-        Text("Local API", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.Bold)
         Text(
             "Serves the loaded model over an OpenAI-compatible HTTP API. Point any " +
                 "client at the base URL below and nothing leaves this phone.",
@@ -214,5 +217,8 @@ fun ServerScreen() {
             onClick = { ServerService.stop(context) },
             modifier = Modifier.fillMaxWidth(),
         ) { Text("Force stop the server") }
+
+        Spacer(Modifier.height(32.dp))
+    }
     }
 }

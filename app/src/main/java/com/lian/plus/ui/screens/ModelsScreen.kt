@@ -1,37 +1,41 @@
 package com.lian.plus.ui.screens
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material.icons.filled.Warning
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.AssistChip
-import androidx.compose.material3.Button
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -43,7 +47,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.lian.plus.core.LianRuntime.ModelLoadState
@@ -52,141 +59,191 @@ import com.lian.plus.core.model.ModelKind
 import com.lian.plus.core.model.formatBytes
 import com.lian.plus.hub.CuratedModel
 import com.lian.plus.hub.HfFile
-import com.lian.plus.ui.components.SectionHeader
+import com.lian.plus.ui.components.BrandCard
+import com.lian.plus.ui.components.BrandChip
+import com.lian.plus.ui.components.GradientButton
+import com.lian.plus.ui.components.GradientIconTile
+import com.lian.plus.ui.theme.Lian
 
 private enum class ModelsTab(val label: String) {
-    INSTALLED("Installed"), RECOMMENDED("Recommended"), SEARCH("Search the Hub")
+    DOWNLOADED("Downloaded"), RECOMMENDED("Recommended"), SEARCH("Search")
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ModelsScreen(vm: ModelsViewModel = viewModel()) {
     val installed by vm.installed.collectAsState()
     val ui by vm.ui.collectAsState()
     val loadState by vm.loadState.collectAsState()
-    var tab by remember { mutableStateOf(ModelsTab.INSTALLED) }
+    val report by vm.capability.collectAsState()
+
+    var tab by remember { mutableStateOf(ModelsTab.DOWNLOADED) }
     var query by remember { mutableStateOf("") }
     var pendingDelete by remember { mutableStateOf<InstalledModel?>(null) }
 
-    Column(Modifier.fillMaxSize()) {
+    Column(Modifier.fillMaxSize().background(Lian.Background)) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            ModelsTab.entries.forEach { entry ->
-                FilterChip(
-                    selected = tab == entry,
-                    onClick = { tab = entry },
-                    label = { Text(entry.label) },
+            GradientIconTile(Icons.Default.Tune, size = 40.dp)
+            Spacer(Modifier.width(12.dp))
+            Column(Modifier.weight(1f)) {
+                Text("Models", style = MaterialTheme.typography.titleMedium, color = Lian.TextPrimary)
+                Text(
+                    "${installed.size} installed · ${formatBytes(ui.diskUsage)} on disk",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Lian.TextMuted,
                 )
             }
         }
 
+        Row(
+            Modifier
+                .fillMaxWidth()
+                .horizontalScroll(rememberScrollState())
+                .padding(horizontal = 16.dp),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            ModelsTab.entries.forEach { entry ->
+                BrandChip(entry.label, tab == entry, { tab = entry })
+            }
+        }
+
         (loadState as? ModelLoadState.Loading)?.let { state ->
-            Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
                 Text(
                     "Loading ${state.model.displayName}…",
-                    style = MaterialTheme.typography.bodySmall,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Lian.TextMuted,
                 )
                 LinearProgressIndicator(
                     progress = { state.fraction },
+                    color = Lian.Cyan,
+                    trackColor = Lian.SurfaceRaised,
                     modifier = Modifier.fillMaxWidth(),
                 )
             }
         }
 
         ui.download?.let { d ->
-            Card(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                colors = CardDefaults.cardColors(
-                    containerColor = MaterialTheme.colorScheme.secondaryContainer,
-                ),
+            BrandCard(
+                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                highlighted = true,
             ) {
-                Column(Modifier.padding(12.dp)) {
-                    Row(
-                        Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(d.fileName, style = MaterialTheme.typography.bodyMedium, maxLines = 1)
-                        IconButton(onClick = vm::cancelDownload) {
-                            Icon(Icons.Default.Close, contentDescription = "Pause download")
-                        }
-                    }
-                    LinearProgressIndicator(
-                        progress = { d.fraction },
-                        modifier = Modifier.fillMaxWidth(),
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        d.fileName,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = Lian.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f),
                     )
                     Text(
-                        "${formatBytes(d.bytesDone)} of ${formatBytes(d.bytesTotal)}" +
-                            if (d.bytesPerSecond > 0) " · ${formatBytes(d.bytesPerSecond)}/s" else "",
-                        style = MaterialTheme.typography.bodySmall,
+                        "${(d.fraction * 100).toInt()}%",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = Lian.Cyan,
                     )
+                }
+                Spacer(Modifier.height(8.dp))
+                LinearProgressIndicator(
+                    progress = { d.fraction },
+                    color = Lian.Cyan,
+                    trackColor = Lian.SurfaceRaised,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "${formatBytes(d.bytesDone)} / ${formatBytes(d.bytesTotal)}" +
+                            if (d.bytesPerSecond > 0) " · ${formatBytes(d.bytesPerSecond)}/s" else "",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Lian.TextMuted,
+                    )
+                    TextButton(onClick = vm::cancelDownload) {
+                        Text("Cancel", color = Lian.Danger)
+                    }
                 }
             }
         }
 
         ui.message?.let { msg ->
-            Card(
-                Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
-                    .clickable { vm.dismissMessage() },
-            ) {
-                Text(msg, Modifier.padding(12.dp), style = MaterialTheme.typography.bodyMedium)
-            }
+            Text(
+                msg,
+                style = MaterialTheme.typography.bodySmall,
+                color = Lian.Cyan,
+                modifier = Modifier
+                    .clickable { vm.dismissMessage() }
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+            )
         }
 
         when (tab) {
-            ModelsTab.INSTALLED -> InstalledList(
+            ModelsTab.DOWNLOADED -> InstalledList(
                 installed = installed,
-                diskUsage = ui.diskUsage,
                 activeTextId = (loadState as? ModelLoadState.Ready)?.model?.id,
                 onActivate = vm::activate,
                 onDelete = { pendingDelete = it },
+                modifier = Modifier.weight(1f),
             )
 
             ModelsTab.RECOMMENDED -> CuratedList(
                 models = vm.curatedFor(),
                 busy = ui.loadingRepo || ui.download != null,
                 onDownload = vm::downloadCurated,
+                modifier = Modifier.weight(1f),
             )
 
-            ModelsTab.SEARCH -> Column {
+            ModelsTab.SEARCH -> Column(Modifier.weight(1f)) {
                 OutlinedTextField(
                     value = query,
                     onValueChange = { query = it },
-                    label = { Text("Search Hugging Face for GGUF models") },
+                    placeholder = { Text("Search Hugging Face…", color = Lian.TextMuted) },
                     singleLine = true,
+                    shape = RoundedCornerShape(14.dp),
                     trailingIcon = {
                         IconButton(onClick = { vm.search(query) }) {
-                            Icon(Icons.Default.Search, contentDescription = "Search")
+                            Icon(Icons.Default.Search, contentDescription = "Search", tint = Lian.Cyan)
                         }
                     },
                     modifier = Modifier.fillMaxWidth().padding(16.dp),
+                    colors = lianFieldColors(),
                 )
                 if (ui.searching) {
                     Box(Modifier.fillMaxWidth().padding(24.dp), Alignment.Center) {
-                        CircularProgressIndicator()
+                        CircularProgressIndicator(color = Lian.Cyan)
                     }
                 }
-                LazyColumn(Modifier.fillMaxSize()) {
+                LazyColumn(
+                    Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
                     items(ui.searchResults, key = { it.id }) { summary ->
-                        Card(
-                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)
-                                .clickable { vm.openRepo(summary.id) },
+                        BrandCard(
+                            Modifier.fillMaxWidth(),
+                            onClick = { vm.openRepo(summary.id) },
                         ) {
-                            Column(Modifier.padding(12.dp)) {
-                                Text(
-                                    summary.name,
-                                    style = MaterialTheme.typography.titleSmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                                Text(
-                                    "${summary.owner} · ${summary.downloads} downloads · " +
-                                        "${summary.likes} likes",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
+                            Text(
+                                summary.name,
+                                style = MaterialTheme.typography.titleSmall,
+                                color = Lian.TextPrimary,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                "${summary.owner} · ${summary.downloads} downloads",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Lian.TextMuted,
+                            )
                         }
                     }
                 }
@@ -198,11 +255,14 @@ fun ModelsScreen(vm: ModelsViewModel = viewModel()) {
         val best = remember(detail) { vm.bestFileFor(detail) }
         AlertDialog(
             onDismissRequest = vm::closeRepo,
-            title = { Text(detail.summary.name, maxLines = 2) },
+            containerColor = Lian.Surface,
+            title = {
+                Text(detail.summary.name, maxLines = 2, color = Lian.TextPrimary)
+            },
             text = {
                 LazyColumn(Modifier.height(400.dp)) {
                     if (detail.ggufFiles.isEmpty()) {
-                        item { Text("This repository has no GGUF files.") }
+                        item { Text("This repository has no GGUF files.", color = Lian.TextMuted) }
                     }
                     items(detail.ggufFiles, key = { it.path }) { file ->
                         FileRow(
@@ -217,106 +277,121 @@ fun ModelsScreen(vm: ModelsViewModel = viewModel()) {
                     }
                 }
             },
-            confirmButton = { TextButton(onClick = vm::closeRepo) { Text("Close") } },
+            confirmButton = {
+                TextButton(onClick = vm::closeRepo) { Text("Close", color = Lian.Cyan) }
+            },
         )
     }
 
     pendingDelete?.let { model ->
         AlertDialog(
             onDismissRequest = { pendingDelete = null },
-            title = { Text("Delete ${model.displayName}?") },
-            text = { Text("This frees ${model.sizeLabel}. You can download it again later.") },
+            containerColor = Lian.Surface,
+            title = { Text("Delete ${model.displayName}?", color = Lian.TextPrimary) },
+            text = {
+                Text(
+                    "This frees ${model.sizeLabel}. You can download it again later.",
+                    color = Lian.TextMuted,
+                )
+            },
             confirmButton = {
-                TextButton(onClick = { vm.delete(model); pendingDelete = null }) { Text("Delete") }
+                TextButton(onClick = { vm.delete(model); pendingDelete = null }) {
+                    Text("Delete", color = Lian.Danger)
+                }
             },
             dismissButton = {
-                TextButton(onClick = { pendingDelete = null }) { Text("Keep") }
+                TextButton(onClick = { pendingDelete = null }) { Text("Keep", color = Lian.TextMuted) }
             },
         )
     }
 }
 
+private fun iconFor(kind: ModelKind): ImageVector = when (kind) {
+    ModelKind.IMAGE, ModelKind.IMAGE_COMPONENT -> Icons.Default.Image
+    else -> Icons.Default.Chat
+}
+
+private fun kindLabel(kind: ModelKind): String = when (kind) {
+    ModelKind.TEXT -> "Chat"
+    ModelKind.EMBEDDING -> "Embedding"
+    ModelKind.IMAGE -> "Image"
+    ModelKind.IMAGE_COMPONENT -> "Component"
+}
+
 @Composable
 private fun InstalledList(
     installed: List<InstalledModel>,
-    diskUsage: Long,
     activeTextId: String?,
     onActivate: (InstalledModel) -> Unit,
     onDelete: (InstalledModel) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
     if (installed.isEmpty()) {
         Column(
-            Modifier.fillMaxSize().padding(32.dp),
+            modifier.fillMaxSize().padding(32.dp),
             verticalArrangement = Arrangement.Center,
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-            Text("No models yet", style = MaterialTheme.typography.titleMedium)
-            Spacer(Modifier.height(8.dp))
+            GradientIconTile(Icons.Default.Download, size = 56.dp)
+            Spacer(Modifier.height(14.dp))
+            Text("No models yet", style = MaterialTheme.typography.titleMedium, color = Lian.TextPrimary)
+            Spacer(Modifier.height(6.dp))
             Text(
-                "Open Recommended and pick one that suits this phone, or search the Hub " +
-                    "for something specific.",
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                "Open Recommended — it is already filtered to what this phone can run.",
+                style = MaterialTheme.typography.bodySmall,
+                color = Lian.TextMuted,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
             )
         }
         return
     }
 
-    LazyColumn(Modifier.fillMaxSize()) {
-        item {
-            Text(
-                "${installed.size} file(s) · ${formatBytes(diskUsage)} on disk",
-                style = MaterialTheme.typography.bodySmall,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            )
-        }
-        ModelKind.entries.forEach { kind ->
-            val group = installed.filter { it.kind == kind }
-            if (group.isEmpty()) return@forEach
-            item { SectionHeader(kind.name.lowercase().replace('_', ' ')) }
-            items(group, key = { it.id }) { model ->
-                Card(
-                    Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
-                    colors = CardDefaults.cardColors(
-                        containerColor = if (model.id == activeTextId) {
-                            MaterialTheme.colorScheme.primaryContainer
-                        } else {
-                            MaterialTheme.colorScheme.surface
-                        },
-                    ),
-                ) {
-                    Column(Modifier.padding(12.dp)) {
+    LazyColumn(
+        modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        items(installed, key = { it.id }) { model ->
+            val active = model.id == activeTextId
+            BrandCard(Modifier.fillMaxWidth(), highlighted = active) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    GradientIconTile(iconFor(model.kind), size = 42.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
                         Text(
                             model.displayName,
                             style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
+                            color = Lian.TextPrimary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
                         )
                         Text(
                             buildString {
-                                append(model.sizeLabel)
+                                append(kindLabel(model.kind))
+                                append(" · ").append(model.sizeLabel)
                                 append(" · ").append(model.quant.tag)
-                                model.parameterLabel?.let { append(" · ").append(it) }
                                 model.contextTrained?.let { append(" · ${it / 1024}K ctx") }
-                                model.architecture?.let { append(" · ").append(it) }
                             },
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Lian.TextMuted,
                         )
-                        Row(
-                            Modifier.fillMaxWidth().padding(top = 8.dp),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Button(onClick = { onActivate(model) }) {
-                                Icon(Icons.Default.PlayArrow, contentDescription = null)
-                                Spacer(Modifier.padding(2.dp))
-                                Text(if (model.id == activeTextId) "Reload" else "Use")
-                            }
-                            OutlinedButton(onClick = { onDelete(model) }) {
-                                Icon(Icons.Default.Delete, contentDescription = "Delete")
-                            }
-                        }
+                    }
+                    IconButton(onClick = { onDelete(model) }) {
+                        Icon(
+                            Icons.Default.Delete,
+                            contentDescription = "Delete",
+                            tint = Lian.TextMuted,
+                            modifier = Modifier.size(20.dp),
+                        )
                     }
                 }
+                Spacer(Modifier.height(12.dp))
+                GradientButton(
+                    text = if (active) "Reload" else "Use this model",
+                    onClick = { onActivate(model) },
+                    leadingIcon = Icons.Default.PlayArrow,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
     }
@@ -327,49 +402,65 @@ private fun CuratedList(
     models: List<CuratedModel>,
     busy: Boolean,
     onDownload: (CuratedModel) -> Unit,
+    modifier: Modifier = Modifier,
 ) {
-    LazyColumn(Modifier.fillMaxSize()) {
+    LazyColumn(
+        modifier.fillMaxSize(),
+        contentPadding = PaddingValues(16.dp),
+        verticalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
         item {
             Text(
                 "Filtered to what this device can actually run.",
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(16.dp),
+                color = Lian.TextMuted,
             )
         }
         items(models, key = { it.id }) { model ->
-            Card(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp)) {
-                Column(Modifier.padding(12.dp)) {
-                    Text(
-                        model.title,
-                        style = MaterialTheme.typography.titleSmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                    Text(
-                        "${formatBytes(model.approxSizeBytes)} · ${model.repoId}",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Spacer(Modifier.height(6.dp))
-                    Text(model.blurb, style = MaterialTheme.typography.bodyMedium)
-                    Row(
-                        Modifier.fillMaxWidth().padding(top = 8.dp),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                    ) {
-                        model.strengths.take(3).forEach { s ->
-                            AssistChip(onClick = {}, label = { Text(s) })
-                        }
-                    }
-                    Button(
-                        onClick = { onDownload(model) },
-                        enabled = !busy,
-                        modifier = Modifier.padding(top = 8.dp),
-                    ) {
-                        Icon(Icons.Default.Download, contentDescription = null)
-                        Spacer(Modifier.padding(2.dp))
-                        Text("Download")
+            BrandCard(Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    GradientIconTile(iconFor(model.kind), size = 42.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            model.title,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = Lian.TextPrimary,
+                        )
+                        Text(
+                            "${kindLabel(model.kind)} · ${formatBytes(model.approxSizeBytes)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Lian.TextMuted,
+                        )
                     }
                 }
+                Spacer(Modifier.height(10.dp))
+                Text(model.blurb, style = MaterialTheme.typography.bodySmall, color = Lian.TextMuted)
+                Spacer(Modifier.height(10.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    model.strengths.take(3).forEach {
+                        Box(
+                            Modifier
+                                .clip(RoundedCornerShape(8.dp))
+                                .background(Lian.SurfaceRaised)
+                                .padding(horizontal = 10.dp, vertical = 5.dp),
+                        ) {
+                            Text(
+                                it,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = Lian.TextMuted,
+                            )
+                        }
+                    }
+                }
+                Spacer(Modifier.height(12.dp))
+                GradientButton(
+                    text = "Download",
+                    onClick = { onDownload(model) },
+                    enabled = !busy,
+                    leadingIcon = Icons.Default.Download,
+                    modifier = Modifier.fillMaxWidth(),
+                )
             }
         }
     }
@@ -383,7 +474,7 @@ private fun FileRow(
     onPick: () -> Unit,
 ) {
     Column(
-        Modifier.fillMaxWidth().clickable(onClick = onPick).padding(vertical = 8.dp),
+        Modifier.fillMaxWidth().clickable(onClick = onPick).padding(vertical = 10.dp),
     ) {
         Row(
             Modifier.fillMaxWidth(),
@@ -394,29 +485,28 @@ private fun FileRow(
                 Text(
                     file.fileName,
                     style = MaterialTheme.typography.bodyMedium,
+                    color = Lian.TextPrimary,
                     fontWeight = if (recommended) FontWeight.Bold else FontWeight.Normal,
                 )
                 Text(
-                    formatBytes(file.sizeBytes) + if (recommended) " · best fit for this phone" else "",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    formatBytes(file.sizeBytes) +
+                        if (recommended) " · best fit for this phone" else "",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = if (recommended) Lian.Cyan else Lian.TextMuted,
                 )
             }
-            Icon(Icons.Default.Download, contentDescription = "Download")
+            Icon(Icons.Default.Download, contentDescription = "Download", tint = Lian.Cyan)
         }
         warning?.let {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(top = 4.dp)) {
                 Icon(
                     Icons.Default.Warning,
                     contentDescription = null,
-                    tint = MaterialTheme.colorScheme.error,
-                    modifier = Modifier.padding(end = 4.dp),
+                    tint = Lian.Danger,
+                    modifier = Modifier.size(14.dp),
                 )
-                Text(
-                    it,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error,
-                )
+                Spacer(Modifier.width(6.dp))
+                Text(it, style = MaterialTheme.typography.labelSmall, color = Lian.Danger)
             }
         }
     }

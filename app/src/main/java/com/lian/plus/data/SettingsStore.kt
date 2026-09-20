@@ -54,6 +54,9 @@ data class AppSettings(
 
     val huggingFaceToken: String = "",
     val keepScreenOnWhileGenerating: Boolean = true,
+
+    /** False until the welcome screen has been dismissed once. */
+    val onboardingDone: Boolean = false,
 ) {
     val chatFormat: ChatFormat
         get() = ChatFormat.entries.firstOrNull { it.id == chatFormatId } ?: ChatFormat.AUTO
@@ -114,6 +117,7 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.imageSampler] = next.imageSampler
             prefs[Keys.hfToken] = next.huggingFaceToken
             prefs[Keys.keepScreenOn] = next.keepScreenOnWhileGenerating
+            prefs[Keys.onboardingDone] = next.onboardingDone
         }
     }
 
@@ -156,6 +160,7 @@ class SettingsStore(private val context: Context) {
         imageSampler = this[Keys.imageSampler] ?: 1,
         huggingFaceToken = this[Keys.hfToken] ?: "",
         keepScreenOnWhileGenerating = this[Keys.keepScreenOn] ?: true,
+        onboardingDone = this[Keys.onboardingDone] ?: false,
     )
 
     private object Keys {
@@ -190,5 +195,6 @@ class SettingsStore(private val context: Context) {
         val imageSampler = intPreferencesKey("image_sampler")
         val hfToken = stringPreferencesKey("hf_token")
         val keepScreenOn = booleanPreferencesKey("keep_screen_on")
+        val onboardingDone = booleanPreferencesKey("onboarding_done")
     }
 }

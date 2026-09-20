@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Sampled from the brand artwork. -->
+    <color name="brand_background">#080A16</color>
+    <color name="brand_surface">#12152B</color>
+    <color name="brand_magenta">#F178FC</color>
+    <color name="brand_purple">#8B5CF6</color>
+    <color name="brand_blue">#3B82F6</color>
+    <color name="brand_cyan">#22E3FC</color>
+</resources>

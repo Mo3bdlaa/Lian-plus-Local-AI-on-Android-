@@ -18,6 +18,10 @@ class MainActivity : ComponentActivity() {
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { /* optional */ }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // The launcher shows Theme.LianPlus.Splash (the wordmark on the brand
+        // background) for the cold-start frame; swap to the plain theme before
+        // the first Compose frame so that artwork is not still behind the UI.
+        setTheme(R.style.Theme_LianPlus)
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
 

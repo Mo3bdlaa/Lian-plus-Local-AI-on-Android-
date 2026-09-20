@@ -1,8 +1,19 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.LianPlus" parent="android:Theme.Material.Light.NoActionBar">
+    <!--
+        Lian+ is a dark-only app: the artwork, the gradients and the whole
+        screen design assume a near-black backdrop, and a light variant would
+        need a second design rather than a colour swap.
+    -->
+    <style name="Theme.LianPlus" parent="android:Theme.Material.NoActionBar">
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
-        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightStatusBar">false</item>
+        <item name="android:windowBackground">@color/brand_background</item>
+    </style>
+
+    <!-- Shown for the cold-start frame, so launch does not flash white. -->
+    <style name="Theme.LianPlus.Splash" parent="Theme.LianPlus">
+        <item name="android:windowBackground">@drawable/splash_background</item>
     </style>
 </resources>
