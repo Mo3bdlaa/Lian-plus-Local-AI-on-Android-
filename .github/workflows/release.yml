@@ -101,8 +101,10 @@ jobs:
           EOF
             echo "signed=release" >> "$GITHUB_ENV"
           else
-            # No keystore configured: fall back to a generated debug key so the
-            # APK is at least installable. Flagged in the release notes.
+            # No keystore configured. The build still runs and the APK is still
+            # kept on the run, but publishing is refused further down: a release
+            # signed with a throwaway key cannot be updated over, so shipping
+            # one under a version tag strands whoever installs it.
             keytool -genkeypair -v -keystore "$RUNNER_TEMP/debug.jks" \
               -storepass android -keypass android -alias androiddebugkey \
               -keyalg RSA -keysize 2048 -validity 10000 \
@@ -114,7 +116,7 @@ jobs:
           keyPassword=android
           EOF
             echo "signed=debug" >> "$GITHUB_ENV"
-            echo "::warning::No KEYSTORE_BASE64 secret set - signing with a throwaway debug key."
+            echo "::warning::No KEYSTORE_BASE64 secret set - signing with a throwaway debug key; publishing will be skipped."
           fi
 
       - name: Build the release APK
@@ -150,12 +152,6 @@ jobs:
               "${{ steps.artifact.outputs.name }}" \
               "${{ steps.artifact.outputs.size }}" \
               "${{ steps.artifact.outputs.sha }}"
-            if [ "$signed" = "debug" ]; then
-              printf '\nSigned with a throwaway debug key, so this is a sideload build '
-              printf 'rather than something to redistribute. Set the `KEYSTORE_BASE64`, '
-              printf '`KEYSTORE_PASSWORD`, `KEY_ALIAS` and `KEY_PASSWORD` repository '
-              printf 'secrets to sign properly.\n'
-            fi
           } >> "$OUT"
           echo "path=$OUT" >> "$GITHUB_OUTPUT"
 
@@ -169,6 +165,25 @@ jobs:
           path: dist/*.apk
           if-no-files-found: warn
           retention-days: 30
+
+      # A release is a promise that the next one installs over it. A throwaway
+      # key breaks that promise permanently for anyone who installs it, so the
+      # build is kept as an artifact instead and the run fails loudly.
+      - name: Refuse to publish an unsigned build
+        if: env.signed != 'release'
+        run: |
+          echo "::error::Not publishing ${{ steps.tag.outputs.tag }}: no signing key is configured."
+          echo ""
+          echo "The APK built fine and is attached to this run as an artifact,"
+          echo "but it is signed with a throwaway key. Publishing it would mean"
+          echo "no future version could ever install over it."
+          echo ""
+          echo "Set these four repository secrets, then re-run:"
+          echo "  KEYSTORE_BASE64     base64 -w0 your-release.jks"
+          echo "  KEYSTORE_PASSWORD"
+          echo "  KEY_ALIAS"
+          echo "  KEY_PASSWORD"
+          exit 1
 
       - name: Publish
         env:
