@@ -4,3 +4,9 @@
 [submodule "native/llama.cpp"]
 	path = native/llama.cpp
 	url = https://github.com/ggml-org/llama.cpp
+[submodule "native/Vulkan-Headers"]
+	path = native/Vulkan-Headers
+	url = https://github.com/KhronosGroup/Vulkan-Headers
+[submodule "native/SPIRV-Headers"]
+	path = native/SPIRV-Headers
+	url = https://github.com/KhronosGroup/SPIRV-Headers

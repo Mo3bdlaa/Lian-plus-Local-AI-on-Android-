@@ -9,6 +9,7 @@ plugins {
 }
 
 val buildNative = providers.gradleProperty("lian.buildNative").getOrElse("true").toBoolean()
+val buildVulkan = providers.gradleProperty("lian.vulkan").getOrElse("true").toBoolean()
 val abis = providers.gradleProperty("lian.abiFilters").getOrElse("arm64-v8a")
     .split(",").map { it.trim() }.filter { it.isNotEmpty() }
 
@@ -61,7 +62,8 @@ android {
                 arguments += listOf(
                     "-DANDROID_STL=c++_shared",
                     "-DCMAKE_BUILD_TYPE=Release",
-                    "-DLIAN_BUILD_NATIVE=${if (buildNative) "ON" else "OFF"}"
+                    "-DLIAN_BUILD_NATIVE=${if (buildNative) "ON" else "OFF"}",
+                    "-DLIAN_VULKAN=${if (buildVulkan) "ON" else "OFF"}"
                 )
                 cppFlags += listOf("-O3", "-fvisibility=hidden", "-fvisibility-inlines-hidden")
             }

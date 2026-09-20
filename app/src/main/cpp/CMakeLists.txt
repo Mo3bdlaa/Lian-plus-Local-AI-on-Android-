@@ -10,6 +10,45 @@ get_filename_component(NATIVE_ROOT "${NATIVE_ROOT}" ABSOLUTE)
 
 option(LIAN_BUILD_NATIVE "Compile the llama.cpp / stable-diffusion.cpp engines" ON)
 option(LIAN_BUILD_IMAGE  "Compile the image-generation engine"                  ON)
+option(LIAN_VULKAN       "Build the Vulkan GPU backend into both engines"       ON)
+
+# ---------------------------------------------------------------------------
+# Vulkan
+#
+# The NDK carries the loader and the C headers, but not the C++ bindings ggml
+# uses, so Vulkan-Headers is vendored at exactly the NDK's version (1.3.275).
+# A mismatch there is the kind that compiles and then misbehaves on device.
+#
+# The shader compiler runs on the build host, not the phone. glslc comes from
+# the `glslc` package and the CMake config for SPIRV-Headers from
+# `spirv-headers`; without them the backend is skipped rather than failing the
+# build, so a contributor without the extra packages still gets a working
+# CPU-only APK.
+# ---------------------------------------------------------------------------
+set(LIAN_VULKAN_READY OFF)
+if (LIAN_VULKAN AND LIAN_BUILD_NATIVE)
+    find_program(LIAN_GLSLC glslc)
+    find_package(SPIRV-Headers CONFIG QUIET)
+    set(LIAN_VK_HEADERS "${NATIVE_ROOT}/Vulkan-Headers/include")
+    set(LIAN_SPIRV_HEADERS "${NATIVE_ROOT}/SPIRV-Headers/include")
+
+    if (NOT LIAN_GLSLC)
+        message(WARNING "glslc not found - building without the Vulkan backend. "
+                        "Install it with: apt install glslc spirv-headers")
+    elseif (NOT SPIRV-Headers_FOUND)
+        message(WARNING "SPIRV-Headers CMake config not found - building without "
+                        "the Vulkan backend. Install it with: apt install spirv-headers")
+    elseif (NOT EXISTS "${LIAN_SPIRV_HEADERS}/spirv/unified1/spirv.hpp")
+        message(WARNING "native/SPIRV-Headers is empty - run "
+                        "git submodule update --init --recursive")
+    elseif (NOT EXISTS "${LIAN_VK_HEADERS}/vulkan/vulkan.hpp")
+        message(WARNING "native/Vulkan-Headers is empty - run "
+                        "git submodule update --init --recursive")
+    else()
+        set(LIAN_VULKAN_READY ON)
+        message(STATUS "Vulkan backend enabled (glslc: ${LIAN_GLSLC})")
+    endif()
+endif()
 
 # Stub build: produce the two libraries with the JNI symbols present but every
 # engine call failing cleanly, so the APK still assembles without the vendored
@@ -45,6 +84,17 @@ set(GGML_LLAMAFILE       ON  CACHE BOOL "" FORCE)
 set(GGML_BACKEND_DL      OFF CACHE BOOL "" FORCE)
 set(BUILD_SHARED_LIBS    OFF CACHE BOOL "" FORCE)
 
+if (LIAN_VULKAN_READY)
+    set(GGML_VULKAN ON CACHE BOOL "" FORCE)
+    # Both header sets come from the vendored copies, ahead of anything the
+    # host happens to have installed: the CMake package for SPIRV-Headers only
+    # satisfies find_package, it does not put the headers on the include path
+    # of a cross-compile.
+    include_directories(SYSTEM "${LIAN_VK_HEADERS}" "${LIAN_SPIRV_HEADERS}")
+else()
+    set(GGML_VULKAN OFF CACHE BOOL "" FORCE)
+endif()
+
 # Snapdragon 8 Elite / Exynos 2500 class cores implement dotprod and i8mm; both
 # give a large speed-up on Q4_0/Q4_K matmuls. ggml still probes at runtime, so a
 # device without them simply falls back to the plain NEON kernels.
@@ -60,6 +110,9 @@ target_include_directories(lian_llm PRIVATE
     "${NATIVE_ROOT}/llama.cpp/include"
     "${NATIVE_ROOT}/llama.cpp/ggml/include")
 target_link_libraries(lian_llm PRIVATE llama ggml android log)
+if (LIAN_VULKAN_READY)
+    target_compile_definitions(lian_llm PRIVATE LIAN_HAS_VULKAN=1)
+endif()
 target_link_options(lian_llm PRIVATE
     "-Wl,--exclude-libs,ALL"      # keep ggml/llama symbols out of the dynamic table
     "-Wl,--gc-sections")
@@ -76,6 +129,15 @@ target_link_options(lian_llm PRIVATE
 # ---------------------------------------------------------------------------
 if (LIAN_BUILD_IMAGE AND EXISTS "${NATIVE_ROOT}/stable-diffusion.cpp/CMakeLists.txt")
     include(ExternalProject)
+
+    # Diffusion is pure compute, which is where a mobile GPU actually wins -
+    # unlike token generation, which is bound by the memory bus the GPU shares
+    # with the CPU anyway.
+    if (LIAN_VULKAN_READY)
+        set(LIAN_SD_VULKAN ON)
+    else()
+        set(LIAN_SD_VULKAN OFF)
+    endif()
 
     set(SD_SRC     "${NATIVE_ROOT}/stable-diffusion.cpp")
     set(SD_BUILD   "${CMAKE_BINARY_DIR}/sd-build")
@@ -102,11 +164,16 @@ if (LIAN_BUILD_IMAGE AND EXISTS "${NATIVE_ROOT}/stable-diffusion.cpp/CMakeLists.
             -DGGML_NATIVE=OFF
             -DGGML_BACKEND_DL=OFF
             -DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+i8mm
+            -DSD_VULKAN=${LIAN_SD_VULKAN}
+            -DGGML_VULKAN=${LIAN_SD_VULKAN}
+            -DSPIRV-Headers_DIR=${SPIRV-Headers_DIR}
+            -DCMAKE_CXX_FLAGS=-isystem\ ${LIAN_VK_HEADERS}\ -isystem\ ${LIAN_SPIRV_HEADERS}
         BUILD_BYPRODUCTS
             "${SD_BUILD}/libstable-diffusion.a"
             "${SD_BUILD}/ggml/src/libggml.a"
             "${SD_BUILD}/ggml/src/libggml-base.a"
             "${SD_BUILD}/ggml/src/libggml-cpu.a"
+            "${SD_BUILD}/ggml/src/ggml-vulkan/libggml-vulkan.a"
         INSTALL_COMMAND ""
         BUILD_ALWAYS OFF
         USES_TERMINAL_BUILD OFF)
@@ -124,8 +191,13 @@ if (LIAN_BUILD_IMAGE AND EXISTS "${NATIVE_ROOT}/stable-diffusion.cpp/CMakeLists.
         "${SD_BUILD}/ggml/src/libggml.a"
         "${SD_BUILD}/ggml/src/libggml-base.a"
         "${SD_BUILD}/ggml/src/libggml-cpu.a"
+        $<$<BOOL:${LIAN_SD_VULKAN}>:${SD_BUILD}/ggml/src/ggml-vulkan/libggml-vulkan.a>
         -Wl,--end-group
-        android log)
+        android log
+        $<$<BOOL:${LIAN_SD_VULKAN}>:vulkan>)
+if (LIAN_SD_VULKAN)
+    target_compile_definitions(lian_sd PRIVATE LIAN_HAS_VULKAN=1)
+endif()
     target_link_options(lian_sd PRIVATE "-Wl,--exclude-libs,ALL")
 else()
     message(STATUS "Image engine disabled - building lian_sd as a stub")

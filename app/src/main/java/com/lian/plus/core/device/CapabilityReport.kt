@@ -51,16 +51,20 @@ object CapabilityAnalyzer {
 
     private const val GB = 1_073_741_824.0
 
+    /** Kept in step with MemoryBudget: room for KV cache, buffers and the UI. */
+    private const val RUNTIME_RESERVE = 384L * 1024 * 1024
+
     /**
-     * Weights are mmap'd, so they live in the page cache rather than the app's
-     * heap — but the kernel will happily evict them under pressure, and every
-     * eviction turns the next token into a disk read. Budgeting ~45% of total
-     * RAM for weights keeps the working set resident while leaving Android and
-     * the foreground app alive.
+     * Fallback only.
+     *
+     * The live figures come from [com.lian.plus.core.device.MemoryBudget],
+     * which reads what the device actually has free at the moment of asking.
+     * These two exist for the one case where no live reading is available —
+     * the static report shown before anything is loaded — and even there the
+     * available figure is preferred when it is larger.
      */
     private const val WEIGHT_BUDGET_FRACTION = 0.45
 
-    /** Absolute ceiling before the OOM killer becomes a certainty. */
     private const val HARD_BUDGET_FRACTION = 0.62
 
     fun analyze(profile: DeviceProfile): CapabilityReport {
@@ -166,8 +170,27 @@ object CapabilityAnalyzer {
         }
 
         // ---- budgets -------------------------------------------------------
-        val weightBudget = (profile.totalRamBytes * WEIGHT_BUDGET_FRACTION).toLong()
-        val hardBudget = (profile.totalRamBytes * HARD_BUDGET_FRACTION).toLong()
+        // What is free now, full stop. Not a floor of "some fraction of total"
+        // underneath it: that floor is exactly what made a busy 12 GB phone
+        // claim 5 GB of budget while it had 400 MB to give.
+        //
+        // The fraction survives only for the case where the system reports no
+        // available figure at all, which should not happen on a real device.
+        val weightBudget = if (profile.availableRamBytes > 0) {
+            (profile.availableRamBytes - profile.lowMemoryThresholdBytes - RUNTIME_RESERVE)
+                .coerceAtLeast(0)
+        } else {
+            (profile.totalRamBytes * WEIGHT_BUDGET_FRACTION).toLong()
+        }
+
+        // The hard limit is the same reading without the runtime reserve: past
+        // it the weights start paging from storage rather than failing, which
+        // is slow rather than fatal, so it is worth naming as a separate band.
+        val hardBudget = if (profile.availableRamBytes > 0) {
+            (profile.availableRamBytes - profile.lowMemoryThresholdBytes).coerceAtLeast(0)
+        } else {
+            (profile.totalRamBytes * HARD_BUDGET_FRACTION).toLong()
+        }
         // Never recommend something that will not fit on disk either.
         val storageCap = max(0L, profile.freeStorageBytes - 800L * 1024 * 1024)
 
@@ -199,10 +222,12 @@ object CapabilityAnalyzer {
         // Leave one performance core for the UI thread and the HTTP server.
         val threads = max(2, min(profile.performanceCores, profile.cpuCores - 1))
 
-        val canRunImage = arm64 && ramGb >= 5.5 && freeGb >= 3
+        // What a diffusion run needs is roughly the checkpoint again in
+        // scratch, so the question is how much is free, not what the box said.
+        val canRunImage = arm64 && weightBudget >= 1_400L * 1024 * 1024 && freeGb >= 2
         val imageSize = when {
-            ramGb >= 11 -> 1024
-            ramGb >= 7.5 -> 768
+            weightBudget >= 6L * 1024 * 1024 * 1024 -> 1024
+            weightBudget >= 3L * 1024 * 1024 * 1024 -> 768
             else -> 512
         }
 

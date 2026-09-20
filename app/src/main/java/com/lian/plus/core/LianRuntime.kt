@@ -55,6 +55,11 @@ class LianRuntime private constructor(private val appContext: Context) {
 
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
+    val memoryBudget = com.lian.plus.core.device.MemoryBudget(appContext)
+
+    /** Decides what stays in memory; see ModelResidency for the rules. */
+    val residency: ModelResidency by lazy { ModelResidency(this, memoryBudget) }
+
     val settingsStore = SettingsStore(appContext)
     val database: AppDatabase = AppDatabase.get(appContext)
     val modelStore = ModelStore(appContext)
@@ -116,7 +121,10 @@ class LianRuntime private constructor(private val appContext: Context) {
      * Loads [model] using the saved settings, clamped to what the device can
      * actually take. Thread count backs off while the phone is hot.
      */
-    suspend fun loadTextModel(model: InstalledModel): Result<Unit> {
+    suspend fun loadTextModel(
+        model: InstalledModel,
+        onProgress: (Float) -> Unit = {},
+    ): Result<Unit> {
         val settings = settingsStore.settings.first()
         val report = _capability.value ?: refreshCapability()
 
@@ -140,6 +148,7 @@ class LianRuntime private constructor(private val appContext: Context) {
 
         val result = llm.load(model, config) { fraction ->
             _modelLoadState.value = ModelLoadState.Loading(model, fraction)
+            onProgress(fraction)
         }
         return result.fold(
             onSuccess = {
