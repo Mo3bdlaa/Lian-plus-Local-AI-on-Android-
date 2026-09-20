@@ -14,9 +14,11 @@
 #include "llama.h"
 #include "ggml.h"
 #include "ggml-backend.h"
+#include "ggml-cpu.h"
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <mutex>
@@ -192,6 +194,110 @@ Java_com_lian_plus_llm_LlamaNative_hasVulkanSupport(JNIEnv *, jobject) {
 #else
     return JNI_FALSE;
 #endif
+}
+
+/**
+ * Time a square matmul on one backend device and report GFLOP/s.
+ *
+ * The point is not a benchmark score for its own sake: it is the one honest
+ * way to answer "is this phone's GPU worth using for this?". Vendor names and
+ * driver version strings say nothing useful - two devices with the same Adreno
+ * generation differ by a factor of three depending on the ROM - and a driver
+ * that enumerates a compute device may still be slower than the CPU it shares
+ * a memory bus with.
+ *
+ * ggml_mul_mat with F16 weights against an F32 activation is the operation
+ * inference actually spends its time in, so the number transfers.
+ *
+ * Returns GFLOP/s, or -1 when the device cannot run the graph at all - which
+ * is itself a result worth storing, since it means the GPU must not be
+ * offered however good it looks on paper.
+ */
+JNIEXPORT jdouble JNICALL
+Java_com_lian_plus_llm_LlamaNative_benchmarkMatmul(
+        JNIEnv *, jobject, jint device_index, jint dim, jint threads, jint budget_ms) {
+
+    if (device_index < 0 || (size_t) device_index >= ggml_backend_dev_count()) return -1.0;
+
+    const int64_t n = std::max(64, (int) dim);
+
+    ggml_backend_dev_t dev = ggml_backend_dev_get((size_t) device_index);
+    if (dev == nullptr) return -1.0;
+
+    ggml_backend_t backend = ggml_backend_dev_init(dev, nullptr);
+    if (backend == nullptr) return -1.0;
+
+    if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_CPU && threads > 0) {
+        ggml_backend_cpu_set_n_threads(backend, threads);
+    }
+
+    double gflops = -1.0;
+
+    ggml_init_params params = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * 8 + ggml_graph_overhead(),
+        /*.mem_buffer =*/ nullptr,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context * ctx = ggml_init(params);
+    if (ctx == nullptr) {
+        ggml_backend_free(backend);
+        return -1.0;
+    }
+
+    ggml_tensor * a = ggml_new_tensor_2d(ctx, GGML_TYPE_F16, n, n);
+    ggml_tensor * b = ggml_new_tensor_2d(ctx, GGML_TYPE_F32, n, n);
+    ggml_tensor * c = ggml_mul_mat(ctx, a, b);
+
+    ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors(ctx, backend);
+    if (buf != nullptr) {
+        // Small non-zero values: denormals and NaNs can take slow paths, and a
+        // buffer of zeros invites a driver to skip work altogether.
+        std::vector<ggml_fp16_t> a_host((size_t) (n * n), ggml_fp32_to_fp16(0.0125f));
+        std::vector<float>       b_host((size_t) (n * n), 0.25f);
+        ggml_backend_tensor_set(a, a_host.data(), 0, ggml_nbytes(a));
+        ggml_backend_tensor_set(b, b_host.data(), 0, ggml_nbytes(b));
+
+        ggml_cgraph * graph = ggml_new_graph(ctx);
+        ggml_build_forward_expand(graph, c);
+
+        // One untimed pass: the first dispatch pays for shader compilation and
+        // buffer residency, which is startup cost, not throughput.
+        const bool warm_ok =
+            ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS;
+        ggml_backend_synchronize(backend);
+
+        if (warm_ok) {
+            const int    budget = budget_ms > 0 ? budget_ms : 250;
+            const double flops_per_pass = 2.0 * (double) n * (double) n * (double) n;
+
+            const auto started = std::chrono::steady_clock::now();
+            int passes = 0;
+            bool ok = true;
+            while (ok) {
+                ok = ggml_backend_graph_compute(backend, graph) == GGML_STATUS_SUCCESS;
+                ++passes;
+                ggml_backend_synchronize(backend);
+                const auto elapsed = std::chrono::steady_clock::now() - started;
+                if (std::chrono::duration_cast<std::chrono::milliseconds>(elapsed).count()
+                        >= budget) {
+                    break;
+                }
+            }
+            ggml_backend_synchronize(backend);
+            const double seconds = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - started).count();
+
+            if (ok && seconds > 0.0) {
+                gflops = (flops_per_pass * passes) / seconds / 1e9;
+            }
+        }
+
+        ggml_backend_buffer_free(buf);
+    }
+
+    ggml_free(ctx);
+    ggml_backend_free(backend);
+    return gflops;
 }
 
 JNIEXPORT jlong JNICALL

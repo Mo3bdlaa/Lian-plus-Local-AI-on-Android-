@@ -277,7 +277,8 @@ object CapabilityAnalyzer {
             append(" — roughly %.1f GB of weights. ".format(budgetGb))
             append(
                 if (canRunImage) "Image generation is supported."
-                else "Image generation needs at least 6 GB of RAM and is disabled."
+                else "Image generation needs about 1.4 GB free for the checkpoint " +
+                    "and as much again in scratch; there is not that much right now."
             )
         }
     }
@@ -293,11 +294,26 @@ object CapabilityAnalyzer {
         bytesPerElement: Int = 2,
     ): Long = 2L * nLayers * nEmbdKv * contextSize * bytesPerElement
 
-    /** Rough tokens/second estimate, for setting expectations before a download. */
-    fun estimateTokensPerSecond(profile: DeviceProfile, modelFileBytes: Long): Double {
+    /**
+     * Rough tokens/second estimate, for setting expectations before a download.
+     *
+     * When the device has been measured, the measurement wins: a figure taken
+     * from this phone, in its current thermal state, beats one inferred from
+     * which Arm extensions the CPU advertises.
+     */
+    fun estimateTokensPerSecond(
+        profile: DeviceProfile,
+        modelFileBytes: Long,
+        measured: BenchmarkResult? = null,
+    ): Double {
         if (modelFileBytes <= 0) return 0.0
-        // Generation is memory-bandwidth bound: one full pass over the weights
-        // per token. These bandwidth figures are deliberately conservative.
+
+        measured?.let { DeviceBenchmark.tokensPerSecond(it, modelFileBytes) }
+            ?.let { return it }
+
+        // Otherwise generation is treated as memory-bandwidth bound: one full
+        // pass over the weights per token. These figures are deliberately
+        // conservative, being guesses rather than measurements.
         val bandwidthGbPerSec = when {
             profile.hasI8mm && profile.performanceCores >= 4 -> 22.0
             profile.hasI8mm -> 16.0

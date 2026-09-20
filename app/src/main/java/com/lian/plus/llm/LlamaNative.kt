@@ -46,6 +46,19 @@ object LlamaNative {
     /** Whether the Vulkan backend was compiled into this build at all. */
     external fun hasVulkanSupport(): Boolean
 
+    /**
+     * Times an F16xF32 matmul on one device from [backendDevices] and returns
+     * GFLOP/s, or -1 when the device could not run it.
+     *
+     * Blocking, and deliberately not cheap: call it off the main thread.
+     */
+    external fun benchmarkMatmul(
+        deviceIndex: Int,
+        dim: Int,
+        threads: Int,
+        budgetMs: Int,
+    ): Double
+
     external fun loadModel(
         path: String,
         nGpuLayers: Int,

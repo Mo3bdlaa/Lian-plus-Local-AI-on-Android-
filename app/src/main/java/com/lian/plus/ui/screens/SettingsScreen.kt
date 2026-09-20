@@ -55,6 +55,7 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit) {
     val runtime = remember { LianRuntime.get(context) }
     val settings by runtime.settingsStore.settings.collectAsState(initial = AppSettings())
     val report by runtime.capability.collectAsState()
+    val measured by runtime.benchmark.collectAsState()
     val scope = rememberCoroutineScopeSafe()
     var docStatus by remember { mutableStateOf<String?>(null) }
 
@@ -159,8 +160,20 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit) {
                 val gpu = remember { ComputeDevices.gpu() }
                 val reason = remember { ComputeDevices.gpuUnavailableReason() }
 
-                if (gpu != null) {
+                if (gpu != null && !measured.gpuCrashed) {
                     Text(gpu.label, style = MaterialTheme.typography.bodyLarge, color = Lian.TextPrimary)
+                    // The measurement is the honest version of this decision:
+                    // a renderer string cannot tell you whether offloading will
+                    // pay for the memory it takes.
+                    measured.gpuSpeedup?.let { speedup ->
+                        Text(
+                            "Measured at %.1f GFLOP/s — %.1f× this phone's CPU."
+                                .format(measured.gpuGflops, speedup),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = if (measured.gpuWorthUsing) Lian.Cyan else Lian.TextMuted,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
                     Spacer(Modifier.height(10.dp))
                     SliderRow(
                         label = when (settings.gpuLayers) {
@@ -174,6 +187,20 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit) {
                             "the CPU, so expect a smaller gain there. Changing this " +
                             "reloads the model.",
                     ) { v -> edit { it.copy(gpuLayers = v.toInt()) } }
+                } else if (measured.gpuCrashed) {
+                    Text(
+                        "CPU only",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = Lian.TextPrimary,
+                    )
+                    Text(
+                        "The GPU driver faulted the last time the app gave it compute " +
+                            "work, taking the app down with it, so it is not used. " +
+                            "\"Re-check this device\" on the Device screen tries again.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Lian.TextMuted,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
                 } else {
                     Text(
                         "CPU only",

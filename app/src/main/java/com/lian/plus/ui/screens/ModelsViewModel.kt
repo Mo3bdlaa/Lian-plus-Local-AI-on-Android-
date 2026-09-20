@@ -49,6 +49,7 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val capability = runtime.capability
+    val benchmark = runtime.benchmark
     val loadState = runtime.modelLoadState
 
     /** Downloads live in the service, so they survive leaving this screen. */
@@ -67,7 +68,7 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
     // ---- fit -------------------------------------------------------------
 
     fun fitFor(sizeBytes: Long, kind: ModelKind): ModelFit =
-        ModelFitEvaluator.evaluate(sizeBytes, kind, capability.value)
+        ModelFitEvaluator.evaluate(sizeBytes, kind, capability.value, benchmark.value)
 
     fun fitFor(asset: HfAsset, summary: HfModelSummary?): ModelFit =
         fitFor(asset.totalBytes, kindFor(asset.primary, summary))

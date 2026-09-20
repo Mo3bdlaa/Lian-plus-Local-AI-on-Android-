@@ -2,14 +2,18 @@ package com.lian.plus.core
 
 import android.content.Context
 import android.util.Log
+import com.lian.plus.core.device.BenchmarkResult
 import com.lian.plus.core.device.CapabilityAnalyzer
 import com.lian.plus.core.device.CapabilityReport
+import com.lian.plus.core.device.ComputeDevices
+import com.lian.plus.core.device.DeviceBenchmark
 import com.lian.plus.core.device.DeviceProfiler
 import com.lian.plus.core.device.ThermalLevel
 import com.lian.plus.core.model.InstalledModel
 import com.lian.plus.core.model.ModelKind
 import com.lian.plus.core.model.ModelStore
 import com.lian.plus.data.AppSettings
+import com.lian.plus.data.BenchmarkStore
 import com.lian.plus.data.SettingsStore
 import com.lian.plus.data.db.AppDatabase
 import com.lian.plus.hub.HuggingFaceApi
@@ -61,6 +65,7 @@ class LianRuntime private constructor(private val appContext: Context) {
     val residency: ModelResidency by lazy { ModelResidency(this, memoryBudget) }
 
     val settingsStore = SettingsStore(appContext)
+    val benchmarkStore = BenchmarkStore(appContext)
     val database: AppDatabase = AppDatabase.get(appContext)
     val modelStore = ModelStore(appContext)
 
@@ -85,6 +90,10 @@ class LianRuntime private constructor(private val appContext: Context) {
     private val _capability = MutableStateFlow<CapabilityReport?>(null)
     val capability: StateFlow<CapabilityReport?> = _capability.asStateFlow()
 
+    private val _benchmark = MutableStateFlow(BenchmarkResult())
+    /** What the device measured, once it has. Empty until then. */
+    val benchmark: StateFlow<BenchmarkResult> = _benchmark.asStateFlow()
+
     private val _modelLoadState = MutableStateFlow<ModelLoadState>(ModelLoadState.Idle)
     val modelLoadState: StateFlow<ModelLoadState> = _modelLoadState.asStateFlow()
 
@@ -104,7 +113,102 @@ class LianRuntime private constructor(private val appContext: Context) {
             runCatching { modelStore.sync() }
                 .onFailure { Log.w(TAG, "model sync failed: ${it.message}") }
             refreshCapability()
+            runCatching { ensureBenchmark() }
+                .onFailure { Log.w(TAG, "benchmark failed: ${it.message}") }
         }
+    }
+
+    /**
+     * Measures the device once, quietly, and keeps the result.
+     *
+     * The user is never asked for this and never waits on it: it runs after
+     * the UI is up, on a background dispatcher, and its only effect is that
+     * the estimates shown elsewhere stop being guesses. It re-runs when the
+     * hardware, the ROM or the app version changes, since any of the three can
+     * move the numbers.
+     */
+    suspend fun ensureBenchmark(force: Boolean = false): BenchmarkResult {
+        val stored = benchmarkStore.result.first()
+        val fingerprint = DeviceBenchmark.fingerprintOf(appContext)
+        if (!force && stored.hasRun && stored.fingerprint == fingerprint) {
+            _benchmark.value = stored
+            return stored
+        }
+
+        // A marker left armed means the previous run's GPU dispatch took the
+        // process with it. Reading it also clears it, so this is asked once.
+        val crashed = benchmarkStore.gpuProbeLeftArmed() || (!force && stored.gpuCrashed)
+
+        val threads = _capability.value?.recommendedThreads ?: 4
+        val measured = DeviceBenchmark.run(
+            context = appContext,
+            threads = threads,
+            gpuProbeGuard = { armed -> benchmarkStore.setGpuProbeArmed(armed) },
+            previouslyCrashed = crashed,
+        )
+        benchmarkStore.save(measured)
+        _benchmark.value = measured
+        Log.i(
+            TAG,
+            "measured: cpu=%.1f GFLOPS gpu=%.1f GFLOPS ram=%.1f GB/s disk=%.0f MB/s"
+                .format(
+                    measured.cpuGflops,
+                    measured.gpuGflops,
+                    measured.memoryBandwidthGbs,
+                    measured.storageReadMbs,
+                ),
+        )
+        return measured
+    }
+
+    /**
+     * Folds a real generation's throughput back into the stored measurement.
+     *
+     * A synthetic probe is a proxy; an actual forward pass over actual weights
+     * is the thing itself. Back-solving the bandwidth that would explain the
+     * observed tokens/second and smoothing it into the stored figure means the
+     * estimates shown for models the user has *not* downloaded keep improving
+     * from the ones they have - and that they track the phone as it ages,
+     * fills up and throttles.
+     *
+     * Short generations are ignored: with a handful of tokens the number is
+     * mostly prompt processing and scheduling noise.
+     */
+    suspend fun recordGenerationSpeed(tokensPerSecond: Double, generatedTokens: Int) {
+        if (tokensPerSecond <= 0 || generatedTokens < MIN_TOKENS_FOR_FEEDBACK) return
+        val modelBytes = residency.loadedText()?.sizeBytes ?: return
+        if (modelBytes <= 0) return
+
+        val modelGb = modelBytes / 1_073_741_824.0
+        // The inverse of DeviceBenchmark.tokensPerSecond.
+        val impliedBandwidth = tokensPerSecond * modelGb / 0.7
+        if (!impliedBandwidth.isFinite() || impliedBandwidth <= 0) return
+
+        val current = _benchmark.value
+        val blended = if (current.memoryBandwidthGbs > 0) {
+            current.memoryBandwidthGbs * (1 - FEEDBACK_WEIGHT) +
+                impliedBandwidth * FEEDBACK_WEIGHT
+        } else {
+            impliedBandwidth
+        }
+
+        val updated = current.copy(
+            memoryBandwidthGbs = blended,
+            ranAtMillis = if (current.hasRun) current.ranAtMillis else System.currentTimeMillis(),
+            fingerprint = current.fingerprint.ifBlank { DeviceBenchmark.fingerprintOf(appContext) },
+        )
+        _benchmark.value = updated
+        benchmarkStore.save(updated)
+    }
+
+    /**
+     * Whether GPU offload should be offered, which needs both a device the
+     * driver will enumerate and a measurement showing it is worth the memory.
+     */
+    fun gpuWorthOffering(): Boolean {
+        if (ComputeDevices.gpu() == null) return false
+        val measured = _benchmark.value
+        return !measured.gpuCrashed && (!measured.hasRun || measured.gpuWorthUsing)
     }
 
     /** Re-reads the hardware profile, including the GPU name and thermal state. */
@@ -143,11 +247,13 @@ class LianRuntime private constructor(private val appContext: Context) {
             useMmap = true,
             useMlock = settings.useMlock,
             // Asking for offload on a device whose driver offered no compute
-            // device would fail inside the engine with nothing to explain it.
-            gpuLayers = if (com.lian.plus.core.device.ComputeDevices.gpu() != null) {
-                settings.gpuLayers
-            } else {
-                0
+            // device would fail inside the engine with nothing to explain it -
+            // and a driver that already faulted once under compute load is not
+            // worth a second crash, whatever the setting says.
+            gpuLayers = when {
+                ComputeDevices.gpu() == null -> 0
+                _benchmark.value.gpuCrashed -> 0
+                else -> settings.gpuLayers
             },
             kvCacheType = settings.kvCacheType,
             chatFormat = settings.chatFormat,
@@ -244,6 +350,12 @@ class LianRuntime private constructor(private val appContext: Context) {
 
     companion object {
         private const val TAG = "LianRuntime"
+
+        /** Below this, a generation's rate is mostly noise and prompt work. */
+        private const val MIN_TOKENS_FOR_FEEDBACK = 24
+
+        /** How much of each real generation to fold into the stored figure. */
+        private const val FEEDBACK_WEIGHT = 0.25
 
         @Volatile private var instance: LianRuntime? = null
 

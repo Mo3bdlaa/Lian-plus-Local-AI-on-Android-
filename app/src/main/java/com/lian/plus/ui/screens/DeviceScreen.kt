@@ -57,6 +57,7 @@ fun DeviceScreen(onBack: () -> Unit) {
     val context = LocalContext.current
     val runtime = remember { LianRuntime.get(context) }
     val report by runtime.capability.collectAsState()
+    val measured by runtime.benchmark.collectAsState()
     val scope = rememberCoroutineScope()
     var engineInfo by remember { mutableStateOf<String?>(null) }
 
@@ -147,8 +148,16 @@ fun DeviceScreen(onBack: () -> Unit) {
             item {
                 BrandCard(Modifier.fillMaxWidth()) {
                     Text(
-                        "Estimated from memory bandwidth. Real numbers depend on how warm " +
-                            "the phone is and what else is running.",
+                        if (measured.hasRun) {
+                            "Calculated from this phone's measured memory bandwidth of " +
+                                "%.1f GB/s. Real numbers still depend on how warm it is "
+                                    .format(measured.memoryBandwidthGbs) +
+                                "and what else is running."
+                        } else {
+                            "Estimated from the CPU's capabilities. The app measures the " +
+                                "device in the background shortly after starting, and these " +
+                                "numbers get more accurate once it has."
+                        },
                         style = MaterialTheme.typography.labelSmall,
                         color = Lian.TextMuted,
                     )
@@ -159,7 +168,7 @@ fun DeviceScreen(onBack: () -> Unit) {
                         "8B at Q4" to 4_900L * 1024 * 1024,
                     ).forEach { (label, size) ->
                         val fits = size <= current.hardLimitModelFileBytes
-                        val tps = CapabilityAnalyzer.estimateTokensPerSecond(current.profile, size)
+                        val tps = CapabilityAnalyzer.estimateTokensPerSecond(current.profile, size, measured)
                         Row(
                             Modifier.fillMaxWidth().padding(vertical = 5.dp),
                             horizontalArrangement = Arrangement.SpaceBetween,
@@ -218,6 +227,66 @@ fun DeviceScreen(onBack: () -> Unit) {
                 }
             }
 
+            item { SectionTitle("Measured") }
+            item {
+                BrandCard(Modifier.fillMaxWidth()) {
+                    if (!measured.hasRun) {
+                        Text(
+                            "Not measured yet. The app times a matrix multiply on the CPU " +
+                                "and, where there is one, the GPU — a couple of seconds in " +
+                                "the background, without asking you to wait for it.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Lian.TextMuted,
+                        )
+                    } else {
+                        MeasuredRow("CPU", "%.1f GFLOP/s".format(measured.cpuGflops))
+                        when {
+                            measured.gpuGflops > 0 ->
+                                MeasuredRow(
+                                    "GPU",
+                                    "%.1f GFLOP/s".format(measured.gpuGflops),
+                                    highlight = measured.gpuWorthUsing,
+                                )
+                            measured.gpuCrashed ->
+                                MeasuredRow("GPU", "driver fault", danger = true)
+                            measured.gpuRejected ->
+                                MeasuredRow("GPU", "refused the work", danger = true)
+                        }
+                        MeasuredRow(
+                            "Memory bandwidth",
+                            "%.1f GB/s".format(measured.memoryBandwidthGbs),
+                        )
+                        MeasuredRow(
+                            "Storage read",
+                            "%.0f MB/s".format(measured.storageReadMbs),
+                        )
+                        Spacer(Modifier.height(8.dp))
+                        Text(
+                            measured.gpuSpeedup?.let {
+                                if (measured.gpuWorthUsing) {
+                                    "The GPU is %.1f× the CPU here, so offloading is worth it."
+                                        .format(it)
+                                } else {
+                                    "The GPU is only %.1f× the CPU here. On a phone the two "
+                                        .format(it) +
+                                        "share one memory bus, so offloading would cost " +
+                                        "memory for little gain."
+                                }
+                            } ?: when {
+                                measured.gpuCrashed ->
+                                    "A previous GPU probe took the app down with it, so the " +
+                                        "GPU is left alone. Re-measure to try again."
+                                measured.gpuRejected ->
+                                    "The driver enumerated a GPU but would not run the work."
+                                else -> "No GPU compute device was offered by the driver."
+                            },
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Lian.TextMuted,
+                        )
+                    }
+                }
+            }
+
             item { SectionTitle("Memory right now") }
             item {
                 BrandCard(Modifier.fillMaxWidth()) {
@@ -249,11 +318,42 @@ fun DeviceScreen(onBack: () -> Unit) {
             item {
                 GradientButton(
                     text = "Re-check this device",
-                    onClick = { scope.launch { runtime.refreshCapability() } },
+                    onClick = {
+                        scope.launch {
+                            runtime.refreshCapability()
+                            ComputeDevices.refresh()
+                            runtime.benchmarkStore.clearGpuCrash()
+                            runtime.ensureBenchmark(force = true)
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp),
                 )
             }
         }
+    }
+}
+
+@Composable
+private fun MeasuredRow(
+    label: String,
+    value: String,
+    highlight: Boolean = false,
+    danger: Boolean = false,
+) {
+    Row(
+        Modifier.fillMaxWidth().padding(vertical = 4.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(label, style = MaterialTheme.typography.bodySmall, color = Lian.TextPrimary)
+        Text(
+            value,
+            style = MaterialTheme.typography.bodySmall,
+            color = when {
+                danger -> Lian.Danger
+                highlight -> Lian.Cyan
+                else -> Lian.TextMuted
+            },
+        )
     }
 }
 

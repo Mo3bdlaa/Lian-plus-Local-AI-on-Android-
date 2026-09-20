@@ -1,5 +1,6 @@
 package com.lian.plus.core.model
 
+import com.lian.plus.core.device.BenchmarkResult
 import com.lian.plus.core.device.CapabilityAnalyzer
 import com.lian.plus.core.device.CapabilityReport
 
@@ -45,6 +46,7 @@ object ModelFitEvaluator {
         sizeBytes: Long,
         kind: ModelKind,
         report: CapabilityReport?,
+        measured: BenchmarkResult? = null,
     ): ModelFit {
         if (report == null) {
             return ModelFit(
@@ -73,11 +75,15 @@ object ModelFitEvaluator {
 
             ModelKind.IMAGE, ModelKind.IMAGE_COMPONENT -> evaluateImage(sizeBytes, report)
 
-            ModelKind.TEXT -> evaluateText(sizeBytes, report)
+            ModelKind.TEXT -> evaluateText(sizeBytes, report, measured)
         }
     }
 
-    private fun evaluateText(sizeBytes: Long, report: CapabilityReport): ModelFit {
+    private fun evaluateText(
+        sizeBytes: Long,
+        report: CapabilityReport,
+        measured: BenchmarkResult?,
+    ): ModelFit {
         // Deliberately the hardware question, not canRunLlm: whether this build
         // shipped the engine is a property of the APK, and answering "not
         // supported" for it would blame the phone for the wrong thing. The
@@ -90,7 +96,7 @@ object ModelFitEvaluator {
                     ?: "This device cannot run local text models.",
             )
         }
-        val tps = CapabilityAnalyzer.estimateTokensPerSecond(report.profile, sizeBytes)
+        val tps = CapabilityAnalyzer.estimateTokensPerSecond(report.profile, sizeBytes, measured)
         return when {
             sizeBytes <= report.maxModelFileBytes -> ModelFit(
                 FitLevel.FITS,
@@ -121,9 +127,11 @@ object ModelFitEvaluator {
         if (!report.canRunImageGen) {
             return ModelFit(
                 FitLevel.UNSUPPORTED,
-                "Not supported",
-                "Image generation needs about 6 GB of RAM; this device has " +
-                    "%.1f GB.".format(report.profile.totalRamGb),
+                "Not enough free memory",
+                "A diffusion run needs the checkpoint resident plus roughly as " +
+                    "much again in scratch. This device has " +
+                    "${formatBytes(report.profile.availableRamBytes)} free right " +
+                    "now — closing a few apps may be enough.",
             )
         }
         // A diffusion run needs roughly the weights again in scratch space for

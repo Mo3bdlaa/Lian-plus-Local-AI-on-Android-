@@ -467,6 +467,9 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 is TurnEvent.Completed -> {
                     val text = event.text.ifBlank { buffer.toString() }
                     statsLine = event.stats?.let { s ->
+                        // A real generation is a better measurement than any
+                        // synthetic probe, so it refines the device estimates.
+                        runtime.recordGenerationSpeed(s.tokensPerSecond, s.generatedTokens)
                         "%.1f tok/s · %d tokens · %.0f tok/s prompt".format(
                             s.tokensPerSecond, s.generatedTokens, s.prefillTokensPerSecond,
                         )
