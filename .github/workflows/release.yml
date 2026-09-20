@@ -159,11 +159,25 @@ jobs:
           } >> "$OUT"
           echo "path=$OUT" >> "$GITHUB_OUTPUT"
 
+      # Runs even if publishing fails, so a green build is never thrown away
+      # for a permissions problem at the last step.
+      - name: Keep the APK on the run
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lian-plus-${{ steps.tag.outputs.tag }}-apk
+          path: dist/*.apk
+          if-no-files-found: warn
+          retention-days: 30
+
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="${{ steps.tag.outputs.tag }}"
+          if ! gh auth status >/dev/null 2>&1; then
+            echo "::error::GITHUB_TOKEN is not usable for the API."
+          fi
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "dist/${{ steps.artifact.outputs.name }}" --clobber
             gh release edit "$TAG" --notes-file "${{ steps.notes.outputs.path }}"
@@ -171,5 +185,15 @@ jobs:
             gh release create "$TAG" "dist/${{ steps.artifact.outputs.name }}" \
               --title "Lian+ $TAG" \
               --notes-file "${{ steps.notes.outputs.path }}" \
-              --target "$GITHUB_SHA"
+              --target "$GITHUB_SHA" || {
+              # 403 here almost always means the run was started by an
+              # integration whose token cannot write releases. Starting the
+              # same workflow from the Actions tab, or pushing the tag, runs it
+              # as the repository owner and succeeds.
+              echo "::error::Could not create the release. The APK is still" \
+                   "attached to this run as an artifact. If this was a 403," \
+                   "re-run the workflow from the Actions tab (or push the tag)" \
+                   "so it runs under your own account rather than an app's."
+              exit 1
+            }
           fi
