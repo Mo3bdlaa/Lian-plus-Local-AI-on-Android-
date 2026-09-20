@@ -28,16 +28,32 @@ option(LIAN_VULKAN       "Build the Vulkan GPU backend into both engines"       
 set(LIAN_VULKAN_READY OFF)
 if (LIAN_VULKAN AND LIAN_BUILD_NATIVE)
     find_program(LIAN_GLSLC glslc)
-    find_package(SPIRV-Headers CONFIG QUIET)
     set(LIAN_VK_HEADERS "${NATIVE_ROOT}/Vulkan-Headers/include")
     set(LIAN_SPIRV_HEADERS "${NATIVE_ROOT}/SPIRV-Headers/include")
 
+    # ggml gates its Vulkan backend behind find_package(SPIRV-Headers CONFIG
+    # REQUIRED). Under the Android toolchain that search is confined to the
+    # sysroot, so a host package is invisible no matter how it was installed -
+    # which is why this silently fell back to CPU-only in the Gradle build
+    # while working from the command line.
+    #
+    # The package is only a gate: the headers themselves reach the compiler
+    # through the include path below. Generating a minimal config against the
+    # vendored copy satisfies the gate and removes the host dependency too.
+    set(LIAN_SPIRV_CONFIG_DIR "${CMAKE_BINARY_DIR}/spirv-headers-config")
+    file(WRITE "${LIAN_SPIRV_CONFIG_DIR}/SPIRV-HeadersConfig.cmake"
+"if (NOT TARGET SPIRV-Headers::SPIRV-Headers)\n\
+    add_library(SPIRV-Headers::SPIRV-Headers INTERFACE IMPORTED)\n\
+    set_target_properties(SPIRV-Headers::SPIRV-Headers PROPERTIES\n\
+        INTERFACE_INCLUDE_DIRECTORIES \"${LIAN_SPIRV_HEADERS}\")\n\
+endif()\n\
+set(SPIRV-Headers_FOUND TRUE)\n")
+    set(SPIRV-Headers_DIR "${LIAN_SPIRV_CONFIG_DIR}" CACHE PATH "" FORCE)
+    set(CMAKE_FIND_ROOT_PATH_MODE_PACKAGE BOTH)
+
     if (NOT LIAN_GLSLC)
         message(WARNING "glslc not found - building without the Vulkan backend. "
-                        "Install it with: apt install glslc spirv-headers")
-    elseif (NOT SPIRV-Headers_FOUND)
-        message(WARNING "SPIRV-Headers CMake config not found - building without "
-                        "the Vulkan backend. Install it with: apt install spirv-headers")
+                        "Install it with: apt install glslc")
     elseif (NOT EXISTS "${LIAN_SPIRV_HEADERS}/spirv/unified1/spirv.hpp")
         message(WARNING "native/SPIRV-Headers is empty - run "
                         "git submodule update --init --recursive")
@@ -166,7 +182,8 @@ if (LIAN_BUILD_IMAGE AND EXISTS "${NATIVE_ROOT}/stable-diffusion.cpp/CMakeLists.
             -DGGML_CPU_ARM_ARCH=armv8.2-a+dotprod+i8mm
             -DSD_VULKAN=${LIAN_SD_VULKAN}
             -DGGML_VULKAN=${LIAN_SD_VULKAN}
-            -DSPIRV-Headers_DIR=${SPIRV-Headers_DIR}
+            -DSPIRV-Headers_DIR=${LIAN_SPIRV_CONFIG_DIR}
+            -DCMAKE_FIND_ROOT_PATH_MODE_PACKAGE=BOTH
             -DCMAKE_CXX_FLAGS=-isystem\ ${LIAN_VK_HEADERS}\ -isystem\ ${LIAN_SPIRV_HEADERS}
         BUILD_BYPRODUCTS
             "${SD_BUILD}/libstable-diffusion.a"

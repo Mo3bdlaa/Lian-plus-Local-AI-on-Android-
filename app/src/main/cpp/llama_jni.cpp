@@ -13,6 +13,7 @@
 
 #include "llama.h"
 #include "ggml.h"
+#include "ggml-backend.h"
 
 #include <algorithm>
 #include <atomic>
@@ -136,6 +137,61 @@ Java_com_lian_plus_llm_LlamaNative_backendInit(JNIEnv *, jobject) {
 JNIEXPORT jstring JNICALL
 Java_com_lian_plus_llm_LlamaNative_systemInfo(JNIEnv *env, jobject) {
     return to_jstring(env, llama_print_system_info());
+}
+
+/**
+ * Enumerates the compute devices ggml found, one per line:
+ *   name|description|type|freeBytes|totalBytes
+ *
+ * The app needs this before it can offer GPU offload honestly: a build with
+ * the Vulkan backend compiled in still means nothing if the phone's driver
+ * refuses to enumerate a device, and the only way to know is to ask.
+ */
+JNIEXPORT jstring JNICALL
+Java_com_lian_plus_llm_LlamaNative_backendDevices(JNIEnv *env, jobject) {
+    std::string out;
+    const size_t n = ggml_backend_dev_count();
+    for (size_t i = 0; i < n; ++i) {
+        ggml_backend_dev_t dev = ggml_backend_dev_get(i);
+        if (dev == nullptr) continue;
+
+        size_t free_bytes = 0;
+        size_t total_bytes = 0;
+        ggml_backend_dev_memory(dev, &free_bytes, &total_bytes);
+
+        const char *name = ggml_backend_dev_name(dev);
+        const char *desc = ggml_backend_dev_description(dev);
+
+        const char *type = "cpu";
+        switch (ggml_backend_dev_type(dev)) {
+            case GGML_BACKEND_DEVICE_TYPE_GPU:   type = "gpu";   break;
+            case GGML_BACKEND_DEVICE_TYPE_IGPU:  type = "igpu";  break;
+            case GGML_BACKEND_DEVICE_TYPE_ACCEL: type = "accel"; break;
+            default: break;
+        }
+
+        out += name ? name : "?";
+        out += '|';
+        out += desc ? desc : "";
+        out += '|';
+        out += type;
+        out += '|';
+        out += std::to_string(free_bytes);
+        out += '|';
+        out += std::to_string(total_bytes);
+        out += '\n';
+    }
+    return to_jstring(env, out);
+}
+
+/** True when this library was compiled with the Vulkan backend at all. */
+JNIEXPORT jboolean JNICALL
+Java_com_lian_plus_llm_LlamaNative_hasVulkanSupport(JNIEnv *, jobject) {
+#ifdef LIAN_HAS_VULKAN
+    return JNI_TRUE;
+#else
+    return JNI_FALSE;
+#endif
 }
 
 JNIEXPORT jlong JNICALL

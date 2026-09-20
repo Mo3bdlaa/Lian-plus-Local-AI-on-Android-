@@ -154,6 +154,9 @@ interface ImageDao {
     @Query("SELECT * FROM generated_images WHERE id = :id")
     suspend fun byId(id: Long): GeneratedImageEntity?
 
+    @Query("SELECT * FROM generated_images WHERE id IN (:ids)")
+    suspend fun byIds(ids: List<Long>): List<GeneratedImageEntity>
+
     @Query("DELETE FROM generated_images WHERE id = :id")
     suspend fun delete(id: Long)
 }

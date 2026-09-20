@@ -42,6 +42,15 @@ data class MessageEntity(
     val toolName: String? = null,
     /** Absolute path to a generated image, for image replies. */
     val imagePath: String? = null,
+    /**
+     * The generated_images row behind [imagePath].
+     *
+     * Kept as a reference rather than copied fields so the prompt, seed and
+     * sampler that produced a picture stay with it — which is what makes
+     * "regenerate" and "edit this prompt" possible instead of the settings
+     * being thrown away the moment the image appears.
+     */
+    val generatedImageId: Long? = null,
     /** Human-readable generation stats, shown under the message. */
     val statsLine: String? = null,
     val isError: Boolean = false,

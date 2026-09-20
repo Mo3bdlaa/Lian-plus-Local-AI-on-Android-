@@ -24,8 +24,12 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.AutoAwesome
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
+import androidx.compose.material.icons.filled.Download
+import androidx.compose.material.icons.filled.Share
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Refresh
@@ -49,10 +53,12 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextOverflow
@@ -67,6 +73,7 @@ import com.lian.plus.core.model.ModelKind
 import com.lian.plus.ui.components.GradientIconTile
 import com.lian.plus.ui.components.ModelLoadProgress
 import com.lian.plus.ui.components.ModelPickerSheet
+import kotlinx.coroutines.launch
 import com.lian.plus.ui.theme.Lian
 import java.io.File
 
@@ -82,6 +89,7 @@ fun ChatScreen(onBrowseModels: () -> Unit, vm: ChatViewModel = viewModel()) {
     var draft by remember { mutableStateOf("") }
     var showHistory by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
+    var imageActionsFor by remember { mutableStateOf<MessageEntity?>(null) }
     val listState = rememberLazyListState()
     val sheetState = rememberModalBottomSheetState()
 
@@ -164,6 +172,39 @@ fun ChatScreen(onBrowseModels: () -> Unit, vm: ChatViewModel = viewModel()) {
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 1.dp),
             )
         }
+        ui.residencyNote?.let { note ->
+            Text(
+                note,
+                style = MaterialTheme.typography.labelSmall,
+                color = Lian.Cyan,
+                modifier = Modifier
+                    .clickable { vm.clearResidencyNote() }
+                    .padding(horizontal = 16.dp, vertical = 2.dp),
+            )
+        }
+        if (ui.generating && ui.imageTotalSteps > 0) {
+            Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
+                Text(
+                    if (ui.imageStep == 0) {
+                        "Preparing the image — ${ui.imageSeconds}s"
+                    } else {
+                        "Step ${ui.imageStep} of ${ui.imageTotalSteps} — ${ui.imageSeconds}s"
+                    },
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Lian.TextMuted,
+                )
+                LinearProgressIndicator(
+                    progress = {
+                        if (ui.imageTotalSteps > 0) {
+                            ui.imageStep.toFloat() / ui.imageTotalSteps
+                        } else 0f
+                    },
+                    color = Lian.Cyan,
+                    trackColor = Lian.SurfaceRaised,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        }
         ui.prefill?.let { (done, total) ->
             Column(Modifier.padding(horizontal = 16.dp, vertical = 4.dp)) {
                 Text(
@@ -189,7 +230,9 @@ fun ChatScreen(onBrowseModels: () -> Unit, vm: ChatViewModel = viewModel()) {
                 contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
                 verticalArrangement = Arrangement.spacedBy(10.dp),
             ) {
-                items(messages, key = { it.id }) { MessageBubble(it) }
+                items(messages, key = { it.id }) { message ->
+                    MessageBubble(message, onImageTap = { imageActionsFor = message })
+                }
                 if (ui.streamingText.isNotEmpty() || ui.generating) {
                     item {
                         StreamingBubble(ui.streamingText, ui.activeTool, ui.toolTrail)
@@ -205,17 +248,47 @@ fun ChatScreen(onBrowseModels: () -> Unit, vm: ChatViewModel = viewModel()) {
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
+            // The mode decides what Send does. An explicit switch beats hoping
+            // the model works out that "a lion on a hill" wanted a picture.
+            val imageMode = ui.mode == ComposerMode.IMAGE
+            Box(
+                Modifier
+                    .size(52.dp)
+                    .clip(CircleShape)
+                    .background(
+                        if (imageMode) Lian.gradient
+                        else androidx.compose.ui.graphics.Brush.linearGradient(
+                            listOf(Lian.Surface, Lian.Surface),
+                        ),
+                    )
+                    .border(1.dp, if (imageMode) Color.Transparent else Lian.Outline, CircleShape)
+                    .clickable {
+                        vm.setMode(if (imageMode) ComposerMode.TEXT else ComposerMode.IMAGE)
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.Default.AutoAwesome,
+                    contentDescription = if (imageMode) "Switch to text" else "Switch to image",
+                    tint = if (imageMode) Color.White else Lian.TextMuted,
+                    modifier = Modifier.size(22.dp),
+                )
+            }
             OutlinedTextField(
                 value = draft,
                 onValueChange = { draft = it },
                 modifier = Modifier.weight(1f),
                 placeholder = {
                     Text(
-                        if (loaded == null) "Load a model first" else "Message Lian+…",
+                        if (ui.mode == ComposerMode.IMAGE) {
+                            "Describe the image…"
+                        } else {
+                            "Message Lian+…"
+                        },
                         color = Lian.TextMuted,
                     )
                 },
-                enabled = loaded != null,
+                enabled = true,
                 maxLines = 6,
                 shape = RoundedCornerShape(18.dp),
                 colors = lianFieldColors(),
@@ -225,12 +298,12 @@ fun ChatScreen(onBrowseModels: () -> Unit, vm: ChatViewModel = viewModel()) {
                     .size(52.dp)
                     .clip(CircleShape)
                     .background(
-                        if (loaded != null && (ui.generating || draft.isNotBlank())) Lian.gradient
+                        if (ui.generating || draft.isNotBlank()) Lian.gradient
                         else androidx.compose.ui.graphics.Brush.linearGradient(
                             listOf(Lian.SurfaceRaised, Lian.SurfaceRaised),
                         ),
                     )
-                    .clickable(enabled = loaded != null && (ui.generating || draft.isNotBlank())) {
+                    .clickable(enabled = ui.generating || draft.isNotBlank()) {
                         if (ui.generating) {
                             vm.stop()
                         } else {
@@ -246,6 +319,47 @@ fun ChatScreen(onBrowseModels: () -> Unit, vm: ChatViewModel = viewModel()) {
                     tint = Color.White,
                     modifier = Modifier.size(22.dp),
                 )
+            }
+        }
+    }
+
+    // Tapping a generated image opens the iteration actions. This is where a
+    // picture stops being an end product and becomes a draft.
+    imageActionsFor?.let { message ->
+        val context = LocalContext.current
+        val scope = rememberCoroutineScope()
+        ModalBottomSheet(
+            onDismissRequest = { imageActionsFor = null },
+            containerColor = Lian.Surface,
+        ) {
+            Column(Modifier.fillMaxWidth().padding(bottom = 28.dp)) {
+                Text(
+                    "This image",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = Lian.TextPrimary,
+                    modifier = Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                )
+                ImageAction(Icons.Default.Refresh, "Generate again", "Same prompt, new seed") {
+                    imageActionsFor = null
+                    vm.regenerateImage(message)
+                }
+                ImageAction(Icons.Default.Edit, "Edit the prompt", "Load it back into the box") {
+                    scope.launch {
+                        vm.promptOf(message)?.let {
+                            draft = it
+                            vm.setMode(ComposerMode.IMAGE)
+                        }
+                        imageActionsFor = null
+                    }
+                }
+                ImageAction(Icons.Default.Download, "Save to gallery", null) {
+                    message.imagePath?.let { vm.saveToGallery(context, java.io.File(it)) }
+                    imageActionsFor = null
+                }
+                ImageAction(Icons.Default.Share, "Share", null) {
+                    message.imagePath?.let { vm.share(context, java.io.File(it)) }
+                    imageActionsFor = null
+                }
             }
         }
     }
@@ -336,6 +450,31 @@ fun ChatScreen(onBrowseModels: () -> Unit, vm: ChatViewModel = viewModel()) {
 }
 
 @Composable
+private fun ImageAction(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    title: String,
+    subtitle: String?,
+    onClick: () -> Unit,
+) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 20.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(icon, contentDescription = null, tint = Lian.Cyan, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(16.dp))
+        Column {
+            Text(title, style = MaterialTheme.typography.bodyLarge, color = Lian.TextPrimary)
+            subtitle?.let {
+                Text(it, style = MaterialTheme.typography.labelSmall, color = Lian.TextMuted)
+            }
+        }
+    }
+}
+
+@Composable
 private fun EmptyChat(modifier: Modifier, hasModel: Boolean) {
     Column(
         modifier.fillMaxWidth(),
@@ -365,7 +504,7 @@ private fun EmptyChat(modifier: Modifier, hasModel: Boolean) {
 }
 
 @Composable
-private fun MessageBubble(message: MessageEntity) {
+private fun MessageBubble(message: MessageEntity, onImageTap: () -> Unit = {}) {
     val isUser = message.role == ChatTurn.USER
     if (message.role == ChatTurn.TOOL) return // shown as a trail, not a bubble
 
@@ -411,6 +550,7 @@ private fun MessageBubble(message: MessageEntity) {
                         modifier = Modifier
                             .fillMaxWidth()
                             .clip(RoundedCornerShape(12.dp))
+                            .clickable(onClick = onImageTap)
                             .padding(bottom = 8.dp),
                     )
                 }

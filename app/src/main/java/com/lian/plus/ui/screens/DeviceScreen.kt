@@ -38,6 +38,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.lian.plus.core.LianRuntime
 import com.lian.plus.core.device.CapabilityAnalyzer
+import com.lian.plus.core.device.ComputeDevices
 import com.lian.plus.core.device.CapabilityCheck
 import com.lian.plus.core.device.CheckStatus
 import com.lian.plus.core.device.DeviceTier
@@ -175,6 +176,60 @@ fun DeviceScreen(onBack: () -> Unit) {
                             )
                         }
                     }
+                }
+            }
+
+            item { SectionTitle("Compute devices") }
+            item {
+                BrandCard(Modifier.fillMaxWidth()) {
+                    val devices = remember { ComputeDevices.devices() }
+                    if (devices.isEmpty()) {
+                        Text(
+                            "The engine reported no compute devices.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Lian.TextMuted,
+                        )
+                    }
+                    devices.forEach { device ->
+                        Row(
+                            Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                device.label,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Lian.TextPrimary,
+                            )
+                            Text(
+                                device.type.name,
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (device.isGpu) Lian.Cyan else Lian.TextMuted,
+                            )
+                        }
+                    }
+                    ComputeDevices.gpuUnavailableReason()?.let {
+                        Text(
+                            it,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Lian.TextMuted,
+                            modifier = Modifier.padding(top = 8.dp),
+                        )
+                    }
+                }
+            }
+
+            item { SectionTitle("Memory right now") }
+            item {
+                BrandCard(Modifier.fillMaxWidth()) {
+                    val snap = remember { runtime.memoryBudget.snapshot(runtime.residency.residentBytes()) }
+                    Text(snap.summary, style = MaterialTheme.typography.bodySmall, color = Lian.TextPrimary)
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Loadable now: ${formatBytes(snap.freeForNewModel)}. This is measured, " +
+                            "not a share of total RAM, so it moves as you open and close apps.",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = Lian.TextMuted,
+                    )
                 }
             }
 

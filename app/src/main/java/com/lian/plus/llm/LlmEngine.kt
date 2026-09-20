@@ -31,6 +31,8 @@ data class LoadedModelInfo(
     val chatFormat: ChatFormat,
     val hasNativeTemplate: Boolean,
     val loadMillis: Long,
+    /** How many layers actually went to the GPU for this context. */
+    val gpuLayers: Int = 0,
 )
 
 data class EngineConfig(
@@ -41,6 +43,8 @@ data class EngineConfig(
     val flashAttention: Int = -1,
     val useMmap: Boolean = true,
     val useMlock: Boolean = false,
+    /** Layers to offload; 0 keeps everything on the CPU. */
+    val gpuLayers: Int = 0,
     /** 0 = f16, 1 = q8_0, 2 = q4_0. Quantised KV halves context memory. */
     val kvCacheType: Int = 0,
     val chatFormat: ChatFormat = ChatFormat.AUTO,
@@ -104,7 +108,7 @@ class LlmEngine {
 
         val mh = LlamaNative.loadModel(
             path = file.absolutePath,
-            nGpuLayers = 0, // CPU-only build; see docs/ARCHITECTURE.md
+            nGpuLayers = config.gpuLayers,
             useMmap = config.useMmap,
             useMlock = config.useMlock,
             progress = { fraction -> onProgress(fraction); true },
@@ -163,6 +167,7 @@ class LlmEngine {
             chatFormat = format,
             hasNativeTemplate = nativeTemplate != null,
             loadMillis = System.currentTimeMillis() - started,
+            gpuLayers = config.gpuLayers,
         )
         _loaded.value = info
         Log.i(TAG, "loaded ${model.displayName} in ${info.loadMillis} ms, ctx=${info.contextSize}")

@@ -17,7 +17,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MemoryEntity::class,
         GeneratedImageEntity::class,
     ],
-    version = 2,
+    version = 3,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -44,6 +44,13 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /** Links a message to the image generation that produced it. */
+        private val MIGRATION_2_3 = object : Migration(2, 3) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE messages ADD COLUMN generatedImageId INTEGER")
+            }
+        }
+
         @Volatile private var instance: AppDatabase? = null
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
@@ -52,7 +59,7 @@ abstract class AppDatabase : RoomDatabase() {
                 AppDatabase::class.java,
                 "lian.db",
             )
-                .addMigrations(MIGRATION_1_2)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                 .build()
                 .also { instance = it }
         }

@@ -31,9 +31,12 @@ class LianApp : Application() {
         runtime.scope.launch {
             runtime.settingsStore.settings.collectLatest { runtime.syncToolsWithSettings(it) }
         }
+        // Deliberately not loading a model here. Which engine is needed
+        // depends on what the user does first, and paying several seconds and
+        // a few gigabytes for a guess is worse than loading on intent.
         runtime.scope.launch {
-            runCatching { runtime.restoreSelection() }
-                .onFailure { Log.w(TAG, "could not restore the previous model: ${it.message}") }
+            runCatching { runtime.modelStore.sync() }
+                .onFailure { Log.w(TAG, "model sync failed: ${it.message}") }
         }
     }
 

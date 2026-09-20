@@ -4,6 +4,9 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.lian.plus.core.LianRuntime
+import com.lian.plus.data.db.GeneratedImageEntity
+import com.lian.plus.image.ImageEvent
+import java.io.File
 import com.lian.plus.core.model.InstalledModel
 import com.lian.plus.core.model.ModelKind
 import com.lian.plus.core.TurnEvent
@@ -27,8 +30,18 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+/** What the composer will do when Send is tapped. */
+enum class ComposerMode { TEXT, IMAGE }
+
 data class ChatUiState(
     val chatId: Long? = null,
+    val mode: ComposerMode = ComposerMode.TEXT,
+    /** Progress of an image being generated into this conversation. */
+    val imageStep: Int = 0,
+    val imageTotalSteps: Int = 0,
+    val imageSeconds: Int = 0,
+    /** What the residency manager is doing, phrased for the user. */
+    val residencyNote: String? = null,
     val generating: Boolean = false,
     /** The reply being streamed, before it is committed to the database. */
     val streamingText: String = "",
@@ -83,6 +96,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     private var turnJob: Job? = null
 
+    val residencyState = runtime.residency.state
+
+    fun setMode(mode: ComposerMode) {
+        _ui.value = _ui.value.copy(mode = mode)
+    }
+
     init {
         viewModelScope.launch {
             val existing = chatDao.observeAll().first()
@@ -123,6 +142,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         val trimmed = text.trim()
         if (trimmed.isEmpty() || _ui.value.generating) return
 
+        if (_ui.value.mode == ComposerMode.IMAGE) {
+            generateImage(trimmed)
+            return
+        }
+
         turnJob = viewModelScope.launch {
             val chatId = _ui.value.chatId ?: createChat().also {
                 _ui.value = _ui.value.copy(chatId = it)
@@ -157,9 +181,215 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    /**
+     * Generates an image into the conversation.
+     *
+     * The prompt becomes a user message and the picture an assistant reply, so
+     * the thread holds the whole iteration — which is the point: a prompt is
+     * almost never right first time, and previously every attempt was thrown
+     * away the moment the image appeared.
+     */
+    fun generateImage(prompt: String, seed: Long = -1) {
+        if (_ui.value.generating) return
+        turnJob = viewModelScope.launch {
+            val chatId = _ui.value.chatId ?: createChat().also {
+                _ui.value = _ui.value.copy(chatId = it)
+            }
+            messageDao.insert(
+                MessageEntity(chatId = chatId, role = ChatTurn.USER, content = prompt),
+            )
+            chatDao.byId(chatId)?.takeIf { it.title == "New chat" }?.let {
+                chatDao.rename(chatId, prompt.take(48))
+            }
+            chatDao.touch(chatId)
+
+            val model = runtime.modelStore.observe(ModelKind.IMAGE).first()
+                .firstOrNull { it.id == runtime.currentSettings.activeImageModelId }
+                ?: runtime.modelStore.observe(ModelKind.IMAGE).first().firstOrNull()
+
+            if (model == null) {
+                failTurn(chatId, "No image model is installed. Open Models to download one.")
+                return@launch
+            }
+
+            _ui.value = _ui.value.copy(
+                generating = true,
+                imageStep = 0,
+                imageTotalSteps = runtime.currentSettings.imageSteps,
+                imageSeconds = 0,
+                error = null,
+            )
+
+            // Load on intent. The residency manager reports what it had to
+            // release, so a pause is explained rather than unexplained.
+            val ensured = runtime.residency.ensure(model)
+            ensured.onFailure {
+                failTurn(chatId, it.message ?: "Could not load ${model.displayName}")
+                return@launch
+            }
+            ensured.getOrNull()?.let { evicted ->
+                _ui.value = _ui.value.copy(
+                    residencyNote = "Released ${evicted.displayName} to make room for " +
+                        model.displayName,
+                )
+            }
+
+            val ticker = launch {
+                while (true) {
+                    kotlinx.coroutines.delay(1000)
+                    _ui.value = _ui.value.copy(imageSeconds = _ui.value.imageSeconds + 1)
+                }
+            }
+
+            val target = File(runtime.imagesDir, "chat_${System.currentTimeMillis()}.png")
+            val request = runtime.defaultImageRequest().copy(prompt = prompt, seed = seed)
+
+            runtime.imageClient.generate(request, target).collect { event ->
+                when (event) {
+                    is ImageEvent.Step -> _ui.value = _ui.value.copy(
+                        imageStep = event.step,
+                        imageTotalSteps = event.totalSteps,
+                    )
+
+                    is ImageEvent.Done -> {
+                        val imageId = runtime.database.images().insert(
+                            GeneratedImageEntity(
+                                filePath = event.file.absolutePath,
+                                prompt = prompt,
+                                negativePrompt = request.negativePrompt.ifBlank { null },
+                                width = event.width,
+                                height = event.height,
+                                steps = request.steps,
+                                cfgScale = request.cfgScale,
+                                seed = request.seed,
+                                sampler = request.sampler.label,
+                                modelId = model.id,
+                                durationMillis = event.elapsedMillis,
+                            ),
+                        )
+                        messageDao.insert(
+                            MessageEntity(
+                                chatId = chatId,
+                                role = ChatTurn.ASSISTANT,
+                                content = "",
+                                imagePath = event.file.absolutePath,
+                                generatedImageId = imageId,
+                                statsLine = "${event.width}x${event.height} · " +
+                                    "${request.steps} steps · ${event.elapsedMillis / 1000}s",
+                            ),
+                        )
+                        chatDao.touch(chatId)
+                    }
+
+                    is ImageEvent.Failed -> failTurn(chatId, event.message)
+                }
+            }
+
+            ticker.cancel()
+            _ui.value = _ui.value.copy(generating = false, imageStep = 0, imageSeconds = 0)
+        }
+    }
+
+    /** Regenerates an image message with a fresh seed, appended to the thread. */
+    fun regenerateImage(message: MessageEntity) {
+        viewModelScope.launch {
+            val source = message.generatedImageId?.let { runtime.database.images().byId(it) }
+            generateImage(source?.prompt ?: return@launch, seed = -1)
+        }
+    }
+
+    /** Loads an image message's prompt back into the composer for editing. */
+    suspend fun promptOf(message: MessageEntity): String? =
+        message.generatedImageId?.let { runtime.database.images().byId(it)?.prompt }
+
+    private suspend fun failTurn(chatId: Long, message: String) {
+        messageDao.insert(
+            MessageEntity(
+                chatId = chatId,
+                role = ChatTurn.ASSISTANT,
+                content = message,
+                isError = true,
+            ),
+        )
+        _ui.value = _ui.value.copy(generating = false, error = message)
+    }
+
+    /** Copies a generated image into the device gallery. */
+    fun saveToGallery(context: android.content.Context, file: File) {
+        viewModelScope.launch {
+            val ok = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                runCatching {
+                    val values = android.content.ContentValues().apply {
+                        put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, file.name)
+                        put(android.provider.MediaStore.Images.Media.MIME_TYPE, "image/png")
+                        put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/Lian+")
+                    }
+                    val uri = context.contentResolver.insert(
+                        android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values,
+                    ) ?: error("the gallery rejected the file")
+                    context.contentResolver.openOutputStream(uri)?.use { out ->
+                        file.inputStream().use { it.copyTo(out) }
+                    } ?: error("could not open the destination")
+                    true
+                }.getOrElse { false }
+            }
+            _ui.value = _ui.value.copy(
+                residencyNote = if (ok) "Saved to Pictures/Lian+" else "Could not save to the gallery",
+            )
+        }
+    }
+
+    fun share(context: android.content.Context, file: File) {
+        runCatching {
+            val uri = androidx.core.content.FileProvider.getUriForFile(
+                context, "${context.packageName}.files", file,
+            )
+            context.startActivity(
+                android.content.Intent.createChooser(
+                    android.content.Intent(android.content.Intent.ACTION_SEND).apply {
+                        type = "image/png"
+                        putExtra(android.content.Intent.EXTRA_STREAM, uri)
+                        addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    },
+                    "Share image",
+                ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+            )
+        }.onFailure {
+            _ui.value = _ui.value.copy(residencyNote = "Could not share: ${it.message}")
+        }
+    }
+
+    fun clearResidencyNote() {
+        _ui.value = _ui.value.copy(residencyNote = null)
+    }
+
     private suspend fun runTurn(chatId: Long) {
         val settings = runtime.settingsStore.settings.first()
         runtime.syncToolsWithSettings(settings)
+
+        // Load the text model on first use rather than at startup: opening the
+        // app to generate a picture should not pay for a language model.
+        if (!runtime.llm.isLoaded) {
+            val model = settings.activeTextModelId?.let { runtime.modelStore.byId(it) }
+                ?: runtime.modelStore.observe(ModelKind.TEXT).first().firstOrNull()
+            if (model == null) {
+                failTurn(chatId, "No text model is installed. Open Models to download one.")
+                return
+            }
+            _ui.value = _ui.value.copy(
+                generating = true,
+                residencyNote = "Loading ${model.displayName}…",
+            )
+            val ensured = runtime.residency.ensure(model)
+            ensured.onFailure {
+                failTurn(chatId, it.message ?: "Could not load ${model.displayName}")
+                return
+            }
+            _ui.value = _ui.value.copy(
+                residencyNote = ensured.getOrNull()
+                    ?.let { "Released ${it.displayName} to make room for ${model.displayName}" },
+            )
+        }
 
         val history = messageDao.forChat(chatId).map {
             ChatMessage(it.id, it.role, it.content, it.tokens, it.isSummary)

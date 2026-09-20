@@ -40,6 +40,12 @@ object LlamaNative {
 
     external fun systemInfo(): String
 
+    /** One device per line: `name|description|type|freeBytes|totalBytes`. */
+    external fun backendDevices(): String
+
+    /** Whether the Vulkan backend was compiled into this build at all. */
+    external fun hasVulkanSupport(): Boolean
+
     external fun loadModel(
         path: String,
         nGpuLayers: Int,

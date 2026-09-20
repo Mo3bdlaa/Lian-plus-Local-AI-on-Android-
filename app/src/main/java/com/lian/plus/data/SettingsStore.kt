@@ -26,6 +26,14 @@ data class AppSettings(
     val kvCacheType: Int = 0,
     val flashAttention: Int = -1,
     val useMlock: Boolean = false,
+    /**
+     * Layers to run on the GPU. 0 is CPU-only, -1 means "as many as fit".
+     *
+     * Default 0: a mobile GPU shares the memory bus with the CPU, so token
+     * generation gains little, and Android GPU drivers vary enough that this
+     * is opt-in rather than assumed.
+     */
+    val gpuLayers: Int = 0,
     val chatFormatId: String = ChatFormat.AUTO.id,
 
     val temperature: Float = 0.7f,
@@ -95,6 +103,7 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.kvCacheType] = next.kvCacheType
             prefs[Keys.flashAttention] = next.flashAttention
             prefs[Keys.useMlock] = next.useMlock
+            prefs[Keys.gpuLayers] = next.gpuLayers
             prefs[Keys.chatFormat] = next.chatFormatId
             prefs[Keys.temperature] = next.temperature
             prefs[Keys.topK] = next.topK
@@ -138,6 +147,7 @@ class SettingsStore(private val context: Context) {
         kvCacheType = this[Keys.kvCacheType] ?: 0,
         flashAttention = this[Keys.flashAttention] ?: -1,
         useMlock = this[Keys.useMlock] ?: false,
+        gpuLayers = this[Keys.gpuLayers] ?: 0,
         chatFormatId = this[Keys.chatFormat] ?: ChatFormat.AUTO.id,
         temperature = this[Keys.temperature] ?: 0.7f,
         topK = this[Keys.topK] ?: 40,
@@ -173,6 +183,7 @@ class SettingsStore(private val context: Context) {
         val kvCacheType = intPreferencesKey("kv_cache_type")
         val flashAttention = intPreferencesKey("flash_attention")
         val useMlock = booleanPreferencesKey("use_mlock")
+        val gpuLayers = intPreferencesKey("gpu_layers")
         val chatFormat = stringPreferencesKey("chat_format")
         val temperature = floatPreferencesKey("temperature")
         val topK = intPreferencesKey("top_k")

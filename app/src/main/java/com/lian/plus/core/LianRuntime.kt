@@ -142,6 +142,13 @@ class LianRuntime private constructor(private val appContext: Context) {
             flashAttention = settings.flashAttention,
             useMmap = true,
             useMlock = settings.useMlock,
+            // Asking for offload on a device whose driver offered no compute
+            // device would fail inside the engine with nothing to explain it.
+            gpuLayers = if (com.lian.plus.core.device.ComputeDevices.gpu() != null) {
+                settings.gpuLayers
+            } else {
+                0
+            },
             kvCacheType = settings.kvCacheType,
             chatFormat = settings.chatFormat,
         )

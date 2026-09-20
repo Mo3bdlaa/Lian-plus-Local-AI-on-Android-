@@ -39,6 +39,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.lian.plus.core.LianRuntime
+import com.lian.plus.core.device.ComputeDevices
 import com.lian.plus.data.AppSettings
 import com.lian.plus.llm.ChatFormat
 import com.lian.plus.ui.components.BrandCard
@@ -151,6 +152,41 @@ fun SettingsScreen(onBack: () -> Unit, onNavigate: (String) -> Unit) {
                     "Reply limit: ${settings.maxTokens} tokens",
                     settings.maxTokens.toFloat(), 128f..4096f,
                 ) { v -> edit { it.copy(maxTokens = v.toInt()) } }
+            }
+
+            GroupLabel("Hardware acceleration")
+            BrandCard(Modifier.fillMaxWidth()) {
+                val gpu = remember { ComputeDevices.gpu() }
+                val reason = remember { ComputeDevices.gpuUnavailableReason() }
+
+                if (gpu != null) {
+                    Text(gpu.label, style = MaterialTheme.typography.bodyLarge, color = Lian.TextPrimary)
+                    Spacer(Modifier.height(10.dp))
+                    SliderRow(
+                        label = when (settings.gpuLayers) {
+                            0 -> "GPU layers: none (CPU only)"
+                            else -> "GPU layers: ${settings.gpuLayers}"
+                        },
+                        value = settings.gpuLayers.toFloat(),
+                        range = 0f..64f,
+                        hint = "Offloading is worth most for reading long prompts. Token " +
+                            "generation is limited by the memory bus the GPU shares with " +
+                            "the CPU, so expect a smaller gain there. Changing this " +
+                            "reloads the model.",
+                    ) { v -> edit { it.copy(gpuLayers = v.toInt()) } }
+                } else {
+                    Text(
+                        "CPU only",
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = Lian.TextPrimary,
+                    )
+                    Text(
+                        reason ?: "No GPU compute device was offered.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Lian.TextMuted,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
             }
 
             GroupLabel("Engine")
