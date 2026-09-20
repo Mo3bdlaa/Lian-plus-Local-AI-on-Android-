@@ -235,6 +235,49 @@ The tokens/second estimate treats generation as memory-bandwidth bound: one
 pass over the weights per token, with a conservative sustained-bandwidth figure
 per CPU capability class.
 
+## Measuring the device
+
+`DeviceBenchmark` runs once, in the background, a couple of seconds after
+startup, and the user is never asked to wait for it. It exists because none of
+the cheap signals predict throughput: an SoC name, a set of Arm feature flags
+and a GPU renderer string are all within reach for free and all wrong by up to a
+factor of two, depending on the ROM, the thermal state and whether the driver
+will actually run compute shaders.
+
+Three measurements:
+
+* **Matmul GFLOP/s**, per backend device, through `ggml_mul_mat` with F16
+  weights against an F32 activation — the operation inference spends its time
+  in, so the number transfers. The first dispatch is untimed: it pays for
+  shader compilation and buffer residency, which is startup cost, not
+  throughput.
+* **Memory read bandwidth**, over a buffer larger than any phone's last-level
+  cache and stepped one cache line at a time. This is what token generation is
+  bound by — one full pass over the weights per token, from main memory. The
+  buffer is scaled to free memory rather than skipped on a small device.
+* **Storage read speed**, which decides whether a model too large to stay
+  resident is merely slow or unusable, since mmap'd weights evicted under
+  pressure are re-read from there.
+
+The GPU verdict is the point. A device level with the CPU is not worth the
+memory it takes from the image model, and on a shared memory bus a small margin
+vanishes under thermal load, so offload is offered above 1.5x and not below.
+
+**Surviving a driver fault.** A Vulkan driver that faults inside a compute
+dispatch kills the process; no exception reaches Kotlin and nothing runs
+afterwards. `BenchmarkStore` therefore arms a marker before the GPU is touched
+and clears it after, suspending until each write reaches disk — a marker held in
+memory would die with the process and tell us nothing. A marker still set at the
+next launch is the only evidence such a crash leaves, and it is enough: the GPU
+is not offered again until the user asks for it from the Device screen.
+
+**Feedback from real work.** `recordGenerationSpeed` back-solves the bandwidth
+that would explain an observed tokens/second and smooths it into the stored
+figure at a quarter weight. The estimate for a model the user has not downloaded
+therefore improves from the ones they have, and tracks the phone as it ages,
+fills up and throttles. Generations under 24 tokens are ignored, being mostly
+prompt processing and scheduling noise.
+
 ## Model residency
 
 `ModelResidency` owns which models are in memory. Three rules, in order:

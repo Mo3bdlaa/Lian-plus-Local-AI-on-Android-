@@ -33,6 +33,15 @@ the threshold the system itself treats as low, less a reserve for the app. Ten
 gigabytes free means ten gigabytes usable; one gigabyte free means you are told
 honestly what fits in one gigabyte.
 
+**Then measures it.** A couple of seconds after the app starts, in the
+background, it times a matrix multiply on the CPU and on the GPU, measures
+memory bandwidth and storage read speed, and keeps the result. You are never
+asked to wait for it and never told it happened; the only difference is that
+"about N tokens/s" stops being inferred from the CPU's feature flags and starts
+coming from this phone. Every real generation feeds back into the same figure,
+so it keeps improving — and tracks the device as it ages, fills up and
+throttles.
+
 **Finds and downloads models.** Searches the Hugging Face Hub for GGUF
 repositories, lists every quantisation with its real size, marks the best fit for
 your device and warns about the ones that will not fit. Downloads resume after
@@ -54,13 +63,20 @@ can handle, for when you just want something that works.
 - *Prefix caching* — a follow-up question only re-evaluates the new tokens, not
   the whole conversation.
 
-**Uses the GPU.** Both engines carry a Vulkan backend, and every Android phone
-from Android 10 onward ships a Vulkan 1.1 driver. Diffusion is the clear win —
-it is pure compute, which is where a mobile GPU beats the CPU several times over;
-token generation is bound by the memory bus the two share anyway, so the offload
-is yours to set per model. Settings lists the compute devices ggml found, with
-their memory, and when there is no usable one it says which of the three reasons
-applies instead of showing a dead switch.
+**Uses the GPU, when it is worth using.** Both engines carry a Vulkan backend,
+and every Android phone from Android 10 onward ships a Vulkan 1.1 driver.
+Diffusion is the clear win — it is pure compute, which is where a mobile GPU
+beats the CPU several times over; token generation is bound by the memory bus
+the two share anyway. The offload is offered on the strength of the measurement
+rather than the renderer string: a GPU that timed at less than 1.5× the CPU is
+not worth the memory it would take from the image model. Settings lists the
+compute devices ggml found, with their memory, and when there is no usable one
+it says which of the three reasons applies instead of showing a dead switch.
+
+A driver that faults inside a compute dispatch takes the process with it and
+leaves no exception behind. The probe arms a marker before it runs and clears it
+after, so a marker still set at the next launch is evidence enough: that GPU is
+left alone until you ask for it again.
 
 **Loads models when you need them, and keeps them loaded.** Nothing loads at
 startup. Ask a chat for an image and only the image model loads; type instead and
@@ -82,10 +98,10 @@ local network, behind an API key.
 
 ## Install
 
-Direct download — **v0.4.0**, arm64-v8a, 96 MB:
+Direct download — **v0.5.0**, arm64-v8a, 96 MB:
 
 ```
-https://github.com/Mo3bdlaa/Lian-plus-Local-AI-on-Android-/raw/apk/lian-plus-v0.4.0-arm64-v8a.apk
+https://github.com/Mo3bdlaa/Lian-plus-Local-AI-on-Android-/raw/apk/lian-plus-v0.5.0-arm64-v8a.apk
 ```
 
 Open that on the phone and tap the downloaded file. The
@@ -136,6 +152,11 @@ Recommended** → download one → **Chat**.
 **الـ GPU:** التطبيق بيستخدم كارت الشاشة بتاع الموبايل عن طريق Vulkan. من تبويب
 **Settings** تقدر تشوف الأجهزة اللي السواقة عرضتها وتختار GPU أو CPU وكام طبقة
 تتنقل للـ GPU.
+
+**القياس:** بعد ما تفتح التطبيق بثواني، بيقيس لوحده في الخلفية سرعة المعالج
+والكارت والرام والتخزين، من غير ما يسألك أو يستناك. الأرقام اللي بتشوفها بعد كدا
+(زي «حوالي كذا توكن في الثانية») بقت مقاسة من موبايلك انت، مش متوقعة من نوع
+المعالج. وكل مرة بتولّد فيها كلام بيتحسّن الرقم أكتر.
 
 **لو عايز تستخدم الموبايل كسيرفر:** تبويب **Server** بيشغّل API متوافق مع OpenAI
 على `127.0.0.1:8080`، فأي برنامج بيتكلم مع OpenAI API يقدر يشتغل على الموبايل.
