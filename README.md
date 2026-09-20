@@ -22,9 +22,16 @@ Built on [llama.cpp](https://github.com/ggml-org/llama.cpp) for text and
 ## What it does
 
 **Checks the device first.** Reads RAM, CPU cores and clocks, Arm extensions
-(`dotprod`, `i8mm`), GPU, free storage and thermal state, then gives a verdict:
-which model sizes fit, how much context, how many threads, and a tokens/second
-estimate so the numbers are not a surprise later.
+(`dotprod`, `i8mm`), the Vulkan compute devices the driver actually offers, free
+storage and thermal state, then gives a verdict: which model sizes fit, how much
+context, how many threads, and a tokens/second estimate so the numbers are not a
+surprise later.
+
+Nothing in that verdict comes from a fraction of total RAM. Every "will this fit"
+answer is measured at the moment it is asked — memory actually available, less
+the threshold the system itself treats as low, less a reserve for the app. Ten
+gigabytes free means ten gigabytes usable; one gigabyte free means you are told
+honestly what fits in one gigabyte.
 
 **Finds and downloads models.** Searches the Hugging Face Hub for GGUF
 repositories, lists every quantisation with its real size, marks the best fit for
@@ -47,8 +54,24 @@ can handle, for when you just want something that works.
 - *Prefix caching* — a follow-up question only re-evaluates the new tokens, not
   the whole conversation.
 
+**Uses the GPU.** Both engines carry a Vulkan backend, and every Android phone
+from Android 10 onward ships a Vulkan 1.1 driver. Diffusion is the clear win —
+it is pure compute, which is where a mobile GPU beats the CPU several times over;
+token generation is bound by the memory bus the two share anyway, so the offload
+is yours to set per model. Settings lists the compute devices ggml found, with
+their memory, and when there is no usable one it says which of the three reasons
+applies instead of showing a dead switch.
+
+**Loads models when you need them, and keeps them loaded.** Nothing loads at
+startup. Ask a chat for an image and only the image model loads; type instead and
+the text model loads, with the wait shown while it happens. If the measured
+budget holds both, both stay resident. Only when it does not is one released —
+and the app names which one, and why.
+
 **Generates images** from a diffusion checkpoint, in a separate OS process so its
-large transient allocations cannot take the language model down with them.
+large transient allocations cannot take the language model down with them. Images
+are generated inside the conversation, so a prompt can be refined in the thread
+that produced it; tap one to generate again, edit the prompt, save or share.
 
 **Serves an OpenAI-compatible API** on `127.0.0.1:8080`, so any tool that speaks
 the OpenAI REST API can use the phone as its backend — with streaming, tools and
@@ -59,8 +82,15 @@ local network, behind an API key.
 
 ## Install
 
-Grab the APK from [Releases](https://github.com/Mo3bdlaa/Lian-plus-Local-AI-on-Android-/releases),
-or build it yourself:
+Direct download — **v0.4.0**, arm64-v8a, 96 MB:
+
+```
+https://github.com/Mo3bdlaa/Lian-plus-Local-AI-on-Android-/raw/apk/lian-plus-v0.4.0-arm64-v8a.apk
+```
+
+Open that on the phone and tap the downloaded file. The
+[`apk` branch](https://github.com/Mo3bdlaa/Lian-plus-Local-AI-on-Android-/tree/apk)
+always carries the current build and its checksum. Or build it yourself:
 
 ```bash
 git clone --recurse-submodules https://github.com/Mo3bdlaa/Lian-plus-Local-AI-on-Android-
@@ -75,7 +105,9 @@ If you cloned without `--recurse-submodules`:
 git submodule update --init --recursive
 ```
 
-Requirements: JDK 17+, Android SDK 35, NDK 27.2.12479018, CMake 3.22.1.
+Requirements: JDK 17+, Android SDK 35, NDK 27.2.12479018, CMake 3.22.1, and
+`glslc` (`apt install glslc`) to compile the Vulkan shaders. Without `glslc` the
+build still succeeds — it prints a warning and produces a CPU-only APK.
 See [docs/BUILD.md](docs/BUILD.md) for the details, including how to build
 without the native engines for fast UI iteration.
 
@@ -98,14 +130,22 @@ Recommended** → download one → **Chat**.
 3. افتح **Chat** واتكلم عادي.
 
 **للصور:** حمّل نموذج صور من نفس الشاشة (SD Turbo هو الأسرع على الموبايل — صورة في
-٤ خطوات)، بعدها افتح تبويب **Images**.
+٤ خطوات). تقدر تولّد الصور جوه الشات نفسه — بدّل زرار الكتابة لوضع الصورة واكتب
+الوصف، وتقدر تعدّل الوصف وتعيد التوليد في نفس المحادثة.
+
+**الـ GPU:** التطبيق بيستخدم كارت الشاشة بتاع الموبايل عن طريق Vulkan. من تبويب
+**Settings** تقدر تشوف الأجهزة اللي السواقة عرضتها وتختار GPU أو CPU وكام طبقة
+تتنقل للـ GPU.
 
 **لو عايز تستخدم الموبايل كسيرفر:** تبويب **Server** بيشغّل API متوافق مع OpenAI
 على `127.0.0.1:8080`، فأي برنامج بيتكلم مع OpenAI API يقدر يشتغل على الموبايل.
 
 **ملاحظة عن Galaxy S25 Ultra:** بـ ١٢ جيجا رام الجهاز بيقع في فئة *Flagship* —
 يعني نماذج لحد ١٤B بـ Q4، أو 8B بـ Q5/Q6، وسياق لحد ١٦ ألف توكن، وتوليد صور
-بحجم ١٠٢٤ بكسل.
+بحجم ١٠٢٤ بكسل، مع Adreno 830 اللي بيشتغل عليه توليد الصور بالـ Vulkan.
+
+الأرقام دي مش متكتبة في الكود — التطبيق بيقيس الرام المتاحة فعلاً في اللحظة
+اللي بتسأله فيها، فلو الموبايل مزحوم بتطبيقات تانية هيقولك الحقيقة.
 
 ---
 

@@ -44,6 +44,40 @@ and removes the failure mode entirely.
 quantised matmuls fast on modern phones. ggml still probes at runtime, so a
 device without them falls back to plain NEON rather than crashing.
 
+### The Vulkan backend
+
+Both engines are built with `GGML_VULKAN=ON`. Vulkan is the only GPU API worth
+targeting here: every Android device from Android 10 onward ships a Vulkan 1.1
+driver, where OpenCL is vendor-specific and absent on most retail ROMs.
+
+The shaders are compiled on the build host by `glslc` — 1238 SPIR-V variants for
+the text engine, 1611 for the image engine — and embedded in the libraries. That
+is where the APK's size goes, and it is why `lian.vulkan=false` halves it.
+
+Two header sets have to agree with the NDK's loader, which implements 1.3.275:
+`Vulkan-Headers` for the C++ bindings ggml uses, and `SPIRV-Headers` for the
+opcode definitions. Both are vendored as submodules pinned to exactly that tag.
+Taking whatever the host happens to have installed produces a library that
+compiles and then misbehaves against an older driver.
+
+ggml gates the backend behind `find_package(SPIRV-Headers CONFIG REQUIRED)`.
+Under the Android toolchain, `CMAKE_FIND_ROOT_PATH_MODE_PACKAGE` confines that
+search to the sysroot, so a host-installed package is invisible however it was
+installed — and because ggml treats the gate as optional at the top level, the
+Vulkan backend was silently dropped from the Gradle build while the same command
+line worked outside it. The build now generates a minimal
+`SPIRV-HeadersConfig.cmake` pointing at the vendored copy and sets
+`SPIRV-Headers_DIR` to it. The package only satisfies the gate; the headers
+themselves reach the compiler through the include path either way.
+
+**Where the GPU actually helps.** Diffusion is pure compute and gains several
+times over the CPU. Token generation is memory-bandwidth bound, and on a phone
+the GPU shares that bus with the CPU — offloading layers moves the work without
+moving the bottleneck, and costs GPU memory that the image model may want. So
+the offload is a per-model setting rather than a default, and `ComputeDevices`
+reports what `ggml_backend_dev_*` actually enumerated, with each device's free
+and total memory, instead of assuming a GPU exists.
+
 ### Why image generation runs in its own process
 
 `ImageGenService` is declared with `android:process=":imagegen"`. Three reasons,
@@ -166,15 +200,57 @@ made over the API behaves exactly like one typed into the app.
 
 ## Capability analysis
 
-`CapabilityAnalyzer` budgets about 45% of total RAM for weights. Weights are
-mmap'd, so they sit in the page cache rather than the app's heap — but the
-kernel evicts them under pressure, and every eviction turns the next token into
-a disk read. Forty-five percent keeps the working set resident while leaving
-Android and the foreground app alive.
+Earlier versions budgeted a fixed 45% of *total* RAM for weights. That is wrong
+in both directions: a phone with 10 GB genuinely free was refused models it
+would have run comfortably, and a phone with 3 GB free out of 8 was happily
+recommended something that could not fit. Total RAM says what the device was
+sold with; it says nothing about what is available while the user has forty tabs
+open.
+
+`MemoryBudget` therefore derives nothing from a fraction of anything. Every
+answer is read from `ActivityManager.MemoryInfo` at the moment the question is
+asked:
+
+```
+free for a new model = availMem − threshold − runtime reserve
+free if evicted      = availMem + resident − threshold − runtime reserve
+```
+
+`threshold` is the level at which Android itself starts killing background
+processes. It is device-specific and the OS publishes it, which makes it the
+correct margin to respect rather than one invented here. The runtime reserve
+(384 MB) covers the KV cache, compute buffers, the UI and the JVM — the parts
+that are not weights.
+
+The verdict is five-valued rather than yes/no, because weights are mmap'd:
+exceeding the budget degrades into paging from storage, not an immediate kill.
+`TIGHT` means slow, not fatal, and is reported as such. `FITS_AFTER_EVICTION`
+means the model fits once what is already loaded is released, which is a
+different sentence to show the user than "too large".
+
+`CapabilityAnalyzer` uses the same live reading, and falls back to a fraction of
+total RAM only when the platform reports no available figure at all.
 
 The tokens/second estimate treats generation as memory-bandwidth bound: one
 pass over the weights per token, with a conservative sustained-bandwidth figure
 per CPU capability class.
+
+## Model residency
+
+`ModelResidency` owns which models are in memory. Three rules, in order:
+
+1. **Nothing loads until something is asked of it.** Opening the app loads no
+   weights. A chat turn loads the text model; asking for an image loads the
+   image model. Starting the app is therefore instant regardless of what is
+   installed, and a session that only ever generates images never pays for the
+   language model.
+2. **If both fit, both stay.** A phone with the memory to hold a 4 GB text model
+   and a 1.5 GB checkpoint at once keeps them both resident, so switching
+   between text and images costs nothing.
+3. **Eviction only when the measurement says so**, and never silently. When
+   `MemoryBudget` reports the new model needs the space, the other is released
+   and `ensure()` returns which one, so the UI can say what was given up rather
+   than appearing to forget.
 
 Thermal state is read before each model load; a warm phone gets half the
 threads, because thermal throttling makes extra threads actively counter-

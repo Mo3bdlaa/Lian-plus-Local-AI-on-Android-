@@ -11,6 +11,7 @@
 | minSdk | 29 (Android 10) |
 | NDK | 27.2.12479018 |
 | CMake | 3.22.1 |
+| glslc | any recent version |
 
 Install the SDK pieces with:
 
@@ -18,6 +19,20 @@ Install the SDK pieces with:
 sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" \
            "ndk;27.2.12479018" "cmake;3.22.1"
 ```
+
+`glslc` compiles the Vulkan compute shaders on the build host:
+
+```bash
+apt install glslc          # Debian/Ubuntu
+brew install glslang       # macOS
+```
+
+It is the only host dependency outside the SDK. Without it the build still
+succeeds — CMake prints a warning and produces a CPU-only APK, about half the
+size. The Vulkan headers themselves are vendored as submodules
+(`native/Vulkan-Headers`, `native/SPIRV-Headers`) pinned to 1.3.275, the version
+the NDK's loader implements; a mismatch there compiles cleanly and then
+misbehaves on device, which is not a failure mode worth leaving open.
 
 ## Getting the sources
 
@@ -51,6 +66,7 @@ Set in `gradle.properties` or passed with `-P`:
 |---|---|---|
 | `lian.buildNative` | `true` | `false` builds stub engines — the APK installs and the UI works, but the engines report themselves unavailable. Cuts a full build to about a minute; use it for UI work. |
 | `lian.abiFilters` | `arm64-v8a` | ABIs to build. `arm64-v8a` covers every modern phone. Adding `armeabi-v7a` roughly doubles build time and APK size for devices that have too little memory to be useful anyway. |
+| `lian.vulkan` | `true` | `false` skips the Vulkan backend in both engines. Halves the APK and cuts about fifteen minutes off a clean build; the GPU option then reports itself unavailable with that reason. |
 
 ```bash
 ./gradlew assembleDebug -Plian.buildNative=false
@@ -71,9 +87,13 @@ Without it, `assembleRelease` produces an unsigned APK.
 
 ## APK size
 
-Roughly 45 MB, dominated by the two native libraries (about 4 MB for the text
-engine, about 35 MB for the image engine once stripped). To drop the image
-engine entirely, set `LIAN_BUILD_IMAGE=OFF` in
+Roughly 96 MB, almost all of it the two native libraries: about 28 MB for the
+text engine and 62 MB for the image engine once stripped and compressed. The
+compiled Vulkan shaders are the bulk of that — 1238 SPIR-V variants in the
+text engine and 1611 in the image engine — `-Plian.vulkan=false` brings
+the APK back to about 44 MB and gives up the GPU.
+
+To drop the image engine entirely, set `LIAN_BUILD_IMAGE=OFF` in
 `app/src/main/cpp/CMakeLists.txt`; the Images screen then reports the engine as
 unavailable and everything else works.
 
@@ -92,8 +112,15 @@ adb install -r app/build/outputs/apk/release/app-release.apk
 is missing. It declares the locale of the unqualified `res/values` folder, which
 `generateLocaleConfig` requires.
 
-**Out of disk during the native build** — a full two-engine build needs about
-6 GB of scratch space under `app/.cxx`. `./gradlew clean` reclaims it.
+**Out of disk during the native build** — a full two-engine build with Vulkan
+needs about 12 GB of scratch space under `app/.cxx`; the shader objects alone are
+several gigabytes before archiving. `./gradlew clean` reclaims it, and
+`-Plian.vulkan=false` roughly halves the requirement.
+
+**The APK came out at 44 MB instead of 96 MB** — Vulkan was skipped. The build
+log says why, as a CMake warning: `glslc` missing, or a submodule not
+initialised. `LIAN_VULKAN_READY` gates the backend on both, so a missing piece
+degrades to CPU-only rather than failing the build.
 
 **`UnsatisfiedLinkError` at runtime** — the APK was built with
 `lian.buildNative=false`, or for the wrong ABI. Check with:
