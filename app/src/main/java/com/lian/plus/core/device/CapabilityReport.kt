@@ -28,6 +28,9 @@ data class CapabilityCheck(
 data class CapabilityReport(
     val profile: DeviceProfile,
     val tier: DeviceTier,
+    /** The hardware is capable, whatever the APK happens to ship. */
+    val hardwareSupportsLlm: Boolean,
+    /** Capable *and* the engine is present in this build. */
     val canRunLlm: Boolean,
     val canRunImageGen: Boolean,
     /** Largest model file we are willing to recommend, in bytes. */
@@ -208,6 +211,7 @@ object CapabilityAnalyzer {
         return CapabilityReport(
             profile = profile,
             tier = tier,
+            hardwareSupportsLlm = arm64 && ramGb >= 2.5,
             canRunLlm = arm64 && ramGb >= 2.5 && com.lian.plus.llm.LlamaNative.isAvailable,
             canRunImageGen = canRunImage,
             maxModelFileBytes = min(weightBudget, storageCap),

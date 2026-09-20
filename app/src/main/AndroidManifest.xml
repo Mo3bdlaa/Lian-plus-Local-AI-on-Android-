@@ -53,10 +53,26 @@
             its statically linked ggml never shares an address space with the
             copy inside the text engine.
         -->
+        <!--
+            Runs in the foreground while a model is resident or a generation is
+            in flight. Without that it is an ordinary background process, and
+            Android reclaims those first - the client then sees the model
+            having silently "unloaded itself" mid-run.
+        -->
         <service
             android:name=".image.ImageGenService"
             android:exported="false"
+            android:foregroundServiceType="dataSync"
             android:process=":imagegen" />
+
+        <!--
+            Model downloads are gigabytes over mobile data; the user will switch
+            away long before one finishes.
+        -->
+        <service
+            android:name=".hub.DownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

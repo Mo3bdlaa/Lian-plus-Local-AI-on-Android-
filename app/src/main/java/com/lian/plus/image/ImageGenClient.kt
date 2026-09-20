@@ -82,6 +82,8 @@ class ImageGenClient(private val context: Context) {
         val loadedModelId: String? = null,
         val modelVersion: String? = null,
         val engineAvailable: Boolean = true,
+        /** Set when the worker process died rather than being unloaded. */
+        val crashMessage: String? = null,
     )
 
     private suspend fun connect(): IImageGenService? {
@@ -100,12 +102,21 @@ class ImageGenClient(private val context: Context) {
                     }
 
                     override fun onServiceDisconnected(name: ComponentName?) {
-                        // The worker process was killed - most likely by the OOM
-                        // killer during a large generation. Forget the handle so
-                        // the next request rebinds and reloads.
-                        Log.w(TAG, "image process disconnected")
+                        // The worker process died. Saying "no model loaded"
+                        // makes it look like the app unloaded on purpose, which
+                        // is the opposite of useful when the real cause is the
+                        // system reclaiming memory.
+                        val wasLoaded = _state.value.loadedModelId
+                        Log.w(TAG, "image process died (model was $wasLoaded)")
                         service = null
-                        _state.value = State(bound = false)
+                        _state.value = State(
+                            bound = false,
+                            crashMessage = if (wasLoaded != null) {
+                                "The image engine was stopped by the system, most likely " +
+                                    "for memory. Close other apps and load the model again; " +
+                                    "a smaller output size also helps."
+                            } else null,
+                        )
                     }
                 }
                 connection = conn
@@ -200,6 +211,10 @@ class ImageGenClient(private val context: Context) {
 
     fun cancel() {
         runCatching { service?.cancel() }
+    }
+
+    fun clearCrashMessage() {
+        _state.value = _state.value.copy(crashMessage = null)
     }
 
     /** Unloads the model and lets the worker process exit, freeing its memory. */

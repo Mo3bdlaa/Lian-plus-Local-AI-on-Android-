@@ -1,10 +1,16 @@
 package com.lian.plus.image
 
+import android.app.Notification
 import android.app.Service
 import android.content.Intent
+import android.content.pm.ServiceInfo
 import android.graphics.Bitmap
+import android.os.Build
 import android.os.IBinder
 import android.util.Log
+import androidx.core.app.NotificationCompat
+import com.lian.plus.R
+import com.lian.plus.util.Notifications
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
@@ -33,6 +39,52 @@ class ImageGenService : Service() {
     @Volatile private var handle: Long = 0
     @Volatile private var loadedPath: String? = null
 
+    override fun onCreate() {
+        super.onCreate()
+        Notifications.ensureChannels(this)
+    }
+
+    /**
+     * Holds the process in the foreground for the duration of a job.
+     *
+     * Without this the worker is an ordinary background process, and Android
+     * reclaims those first: a diffusion run that takes a minute would be killed
+     * partway through, which the client sees only as the model having
+     * "unloaded itself". A foreground notification is the documented way to
+     * tell the OS that this work is the user's current intent.
+     */
+    private fun enterForeground(text: String) {
+        val notification: Notification =
+            NotificationCompat.Builder(this, Notifications.CHANNEL_IMAGE)
+                .setContentTitle("Lian+ image engine")
+                .setContentText(text)
+                .setSmallIcon(R.drawable.ic_image)
+                .setOngoing(true)
+                .setOnlyAlertOnce(true)
+                .setPriority(NotificationCompat.PRIORITY_LOW)
+                .build()
+        runCatching {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(
+                    Notifications.ID_IMAGE,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC,
+                )
+            } else {
+                startForeground(Notifications.ID_IMAGE, notification)
+            }
+            foreground = true
+        }.onFailure { Log.w(TAG, "could not enter the foreground: ${it.message}") }
+    }
+
+    private fun leaveForeground() {
+        if (!foreground) return
+        runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
+        foreground = false
+    }
+
+    @Volatile private var foreground = false
+
     private val binder = object : IImageGenService.Stub() {
 
         override fun isEngineAvailable(): Boolean = SdNative.isAvailable
@@ -51,6 +103,7 @@ class ImageGenService : Service() {
             if (!SdNative.isAvailable) return false
             if (handle != 0L && loadedPath == modelPath) return true
 
+            enterForeground("Loading the model…")
             return worker.submit<Boolean> {
                 freeLocked()
                 val h = runCatching {
@@ -73,12 +126,14 @@ class ImageGenService : Service() {
                 }
                 handle = h
                 loadedPath = if (h != 0L) modelPath else null
+                if (h == 0L) leaveForeground() else enterForeground("Model loaded")
                 h != 0L
             }.get()
         }
 
         override fun unload() {
-            worker.submit { freeLocked() }.get()
+            leaveForeground()
+            worker.submit { freeLocked() }
         }
 
         override fun modelVersion(): String = worker.submit<String> {
@@ -101,6 +156,7 @@ class ImageGenService : Service() {
             callback: IImageGenCallback,
         ) {
             cancelled.set(false)
+            enterForeground("Generating…")
             worker.execute {
                 val started = System.currentTimeMillis()
                 try {
@@ -149,6 +205,10 @@ class ImageGenService : Service() {
                 } catch (t: Throwable) {
                     Log.e(TAG, "generation failed", t)
                     runCatching { callback.onError(t.message ?: "generation failed") }
+                } finally {
+                    // Back to "model loaded", so the process stays resident but
+                    // the notification stops claiming work is in progress.
+                    if (handle != 0L) enterForeground("Model loaded") else leaveForeground()
                 }
             }
         }
@@ -164,6 +224,7 @@ class ImageGenService : Service() {
     override fun onBind(intent: Intent?): IBinder = binder
 
     override fun onDestroy() {
+        leaveForeground()
         worker.submit { freeLocked() }
         worker.shutdown()
         super.onDestroy()

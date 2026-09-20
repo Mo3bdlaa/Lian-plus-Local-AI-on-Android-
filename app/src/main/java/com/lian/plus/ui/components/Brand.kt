@@ -298,3 +298,30 @@ fun GradientDivider(modifier: Modifier = Modifier) {
             ),
     )
 }
+
+/** A coloured verdict pill: whether a model will run on this device. */
+@Composable
+fun FitBadge(fit: com.lian.plus.core.model.ModelFit, modifier: Modifier = Modifier) {
+    val colour = when (fit.level) {
+        com.lian.plus.core.model.FitLevel.FITS -> Lian.Success
+        com.lian.plus.core.model.FitLevel.TIGHT -> Color(0xFFFFB454)
+        com.lian.plus.core.model.FitLevel.TOO_LARGE -> Lian.Danger
+        com.lian.plus.core.model.FitLevel.NO_SPACE -> Lian.Danger
+        com.lian.plus.core.model.FitLevel.UNSUPPORTED -> Lian.TextMuted
+    }
+    val shape = RoundedCornerShape(8.dp)
+    Box(
+        modifier
+            .clip(shape)
+            .background(colour.copy(alpha = 0.16f))
+            .border(1.dp, colour.copy(alpha = 0.55f), shape)
+            .padding(horizontal = 8.dp, vertical = 3.dp),
+    ) {
+        Text(
+            fit.headline,
+            style = MaterialTheme.typography.labelSmall,
+            color = colour,
+            fontWeight = FontWeight.SemiBold,
+        )
+    }
+}

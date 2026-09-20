@@ -62,19 +62,26 @@ import coil.compose.AsyncImage
 import com.lian.plus.data.db.MessageEntity
 import com.lian.plus.llm.ChatTurn
 import com.lian.plus.ui.ChatDeepLink
+import com.lian.plus.core.LianRuntime.ModelLoadState
+import com.lian.plus.core.model.ModelKind
 import com.lian.plus.ui.components.GradientIconTile
+import com.lian.plus.ui.components.ModelLoadProgress
+import com.lian.plus.ui.components.ModelPickerSheet
 import com.lian.plus.ui.theme.Lian
 import java.io.File
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatScreen(vm: ChatViewModel = viewModel()) {
+fun ChatScreen(onBrowseModels: () -> Unit, vm: ChatViewModel = viewModel()) {
     val ui by vm.ui.collectAsState()
     val messages by vm.messages.collectAsState()
     val loaded by vm.loadedModel.collectAsState()
     val chats by vm.chats.collectAsState()
+    val installedModels by vm.installedModels.collectAsState()
+    val modelLoadState by vm.modelLoadState.collectAsState()
     var draft by remember { mutableStateOf("") }
     var showHistory by remember { mutableStateOf(false) }
+    var showModelPicker by remember { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val sheetState = rememberModalBottomSheetState()
 
@@ -100,10 +107,13 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            GradientIconTile(Icons.Default.History, size = 38.dp)
+            Box(Modifier.clickable { showHistory = true }) {
+                GradientIconTile(Icons.Default.History, size = 38.dp)
+            }
             Spacer(Modifier.width(10.dp))
             Column(
-                Modifier.weight(1f).clickable { showHistory = true },
+                // The model chip switches model; history is the icon beside it.
+                Modifier.weight(1f).clickable { showModelPicker = true },
             ) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
@@ -116,7 +126,7 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                     )
                     Icon(
                         Icons.Default.ExpandMore,
-                        contentDescription = "Conversations",
+                        contentDescription = "Change model",
                         tint = Lian.TextMuted,
                         modifier = Modifier.size(18.dp),
                     )
@@ -238,6 +248,23 @@ fun ChatScreen(vm: ChatViewModel = viewModel()) {
                 )
             }
         }
+    }
+
+    if (showModelPicker) {
+        ModelPickerSheet(
+            kind = ModelKind.TEXT,
+            installed = installedModels,
+            activeId = loaded?.model?.id,
+            loading = (modelLoadState as? ModelLoadState.Loading)?.let {
+                ModelLoadProgress(it.model.id, it.fraction)
+            },
+            onPick = { vm.loadModel(it) },
+            onBrowse = {
+                showModelPicker = false
+                onBrowseModels()
+            },
+            onDismiss = { showModelPicker = false },
+        )
     }
 
     if (showHistory) {

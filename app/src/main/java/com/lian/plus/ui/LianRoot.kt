@@ -160,8 +160,12 @@ private fun MainScaffold() {
                         },
                     )
                 }
-                composable("chat") { ChatScreen() }
-                composable("create") { ImageScreen() }
+                composable("chat") {
+                    ChatScreen(onBrowseModels = { navController.switchTab("models") })
+                }
+                composable("create") {
+                    ImageScreen(onBrowseModels = { navController.switchTab("models") })
+                }
                 composable("models") { ModelsScreen() }
 
                 composable("settings") {

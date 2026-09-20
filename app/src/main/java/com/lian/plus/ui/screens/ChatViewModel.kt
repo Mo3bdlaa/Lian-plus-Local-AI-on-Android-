@@ -4,6 +4,8 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.lian.plus.core.LianRuntime
+import com.lian.plus.core.model.InstalledModel
+import com.lian.plus.core.model.ModelKind
 import com.lian.plus.core.TurnEvent
 import com.lian.plus.core.TurnOptions
 import com.lian.plus.data.db.ChatEntity
@@ -62,6 +64,22 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     val loadedModel = runtime.llm.loaded
+
+    /** Text models on the device, for the in-place picker. */
+    val installedModels: StateFlow<List<InstalledModel>> =
+        runtime.modelStore.observe(ModelKind.TEXT)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    val modelLoadState = runtime.modelLoadState
+
+    /** Loads [model] without leaving the chat. */
+    fun loadModel(model: InstalledModel) {
+        viewModelScope.launch {
+            runtime.loadTextModel(model).onFailure {
+                _ui.value = _ui.value.copy(error = it.message)
+            }
+        }
+    }
 
     private var turnJob: Job? = null
 

@@ -1,0 +1,108 @@
+package com.lian.plus
+
+import com.lian.plus.core.device.CapabilityAnalyzer
+import com.lian.plus.core.device.DeviceProfile
+import com.lian.plus.FitLevelFixtures.profile
+import com.lian.plus.core.device.ThermalLevel
+import com.lian.plus.core.model.FitLevel
+import com.lian.plus.core.model.ModelFitEvaluator
+import com.lian.plus.core.model.ModelKind
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+private const val GB = 1024L * 1024 * 1024
+
+class ModelFitTest {
+
+    private val flagship = CapabilityAnalyzer.analyze(profile(ramGb = 12.0, freeGb = 60.0))
+    private val entry = CapabilityAnalyzer.analyze(profile(ramGb = 4.0, freeGb = 20.0))
+
+    @Test
+    fun `a small model fits a flagship`() {
+        val fit = ModelFitEvaluator.evaluate(2 * GB, ModelKind.TEXT, flagship)
+        assertEquals(FitLevel.FITS, fit.level)
+        assertTrue("should estimate a speed", (fit.tokensPerSecond ?: 0.0) > 0)
+    }
+
+    @Test
+    fun `an oversized model is flagged rather than hidden`() {
+        val fit = ModelFitEvaluator.evaluate(40 * GB, ModelKind.TEXT, flagship)
+        assertEquals(FitLevel.TOO_LARGE, fit.level)
+        // Still downloadable: the user is told, not blocked by a missing entry.
+        assertTrue(fit.isDownloadable)
+        assertTrue(fit.detail.isNotBlank())
+    }
+
+    @Test
+    fun `the band between comfortable and impossible reads as tight`() {
+        // Between 45% and 62% of RAM is the "will load, no headroom" band.
+        val tight = (12 * GB * 0.55).toLong()
+        assertEquals(FitLevel.TIGHT, ModelFitEvaluator.evaluate(tight, ModelKind.TEXT, flagship).level)
+    }
+
+    @Test
+    fun `no storage beats every other verdict`() {
+        val cramped = CapabilityAnalyzer.analyze(profile(ramGb = 12.0, freeGb = 1.0))
+        val fit = ModelFitEvaluator.evaluate(2 * GB, ModelKind.TEXT, cramped)
+        assertEquals(FitLevel.NO_SPACE, fit.level)
+        assertFalse(fit.isDownloadable)
+    }
+
+    @Test
+    fun `image models are unsupported below the memory floor`() {
+        val fit = ModelFitEvaluator.evaluate(2 * GB, ModelKind.IMAGE, entry)
+        assertEquals(FitLevel.UNSUPPORTED, fit.level)
+        assertFalse(fit.isDownloadable)
+    }
+
+    @Test
+    fun `image models need more headroom than text of the same size`() {
+        val size = (flagship.maxModelFileBytes * 0.9).toLong()
+        assertEquals(FitLevel.FITS, ModelFitEvaluator.evaluate(size, ModelKind.TEXT, flagship).level)
+        // A diffusion run needs scratch space on top of the weights.
+        assertTrue(
+            ModelFitEvaluator.evaluate(size, ModelKind.IMAGE, flagship).level != FitLevel.FITS,
+        )
+    }
+
+    @Test
+    fun `embedding models always fit`() {
+        val fit = ModelFitEvaluator.evaluate(40L * 1024 * 1024, ModelKind.EMBEDDING, entry)
+        assertEquals(FitLevel.FITS, fit.level)
+    }
+
+    @Test
+    fun `an unprofiled device does not block anything`() {
+        val fit = ModelFitEvaluator.evaluate(5 * GB, ModelKind.TEXT, null)
+        assertTrue(fit.isDownloadable)
+    }
+}
+
+/** Builds device profiles for the tests without touching Android APIs. */
+object FitLevelFixtures {
+    fun profile(ramGb: Double, freeGb: Double) = DeviceProfile(
+        manufacturer = "Test",
+        model = "Device",
+        socModel = "Test SoC",
+        board = "board",
+        androidRelease = "15",
+        sdkInt = 35,
+        supportedAbis = listOf("arm64-v8a"),
+        is64Bit = true,
+        totalRamBytes = (ramGb * GB).toLong(),
+        availableRamBytes = (ramGb * GB * 0.5).toLong(),
+        lowMemoryThresholdBytes = 256L * 1024 * 1024,
+        perAppHeapMb = 512,
+        cpuCores = 8,
+        coreMaxFreqKhz = listOf(2000000, 2000000, 3000000, 3000000),
+        cpuFeatures = setOf("asimddp", "i8mm"),
+        gpuRenderer = null,
+        gpuVendor = null,
+        freeStorageBytes = (freeGb * GB).toLong(),
+        totalStorageBytes = (256 * GB),
+        thermalStatus = ThermalLevel.NONE,
+        isLowRamDevice = false,
+    )
+}

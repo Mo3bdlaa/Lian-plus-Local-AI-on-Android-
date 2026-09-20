@@ -3,6 +3,7 @@ package com.lian.plus
 import android.app.Application
 import android.util.Log
 import com.lian.plus.core.LianRuntime
+import com.lian.plus.util.Notifications
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 
@@ -17,9 +18,14 @@ class LianApp : Application() {
         // The image worker runs in :imagegen and must not build a second
         // runtime - it has no use for the database, engines or HTTP server.
         if (isImageGenProcess()) {
+            // The worker still needs its channel: startForeground in that
+            // process will fail without one.
+            Notifications.ensureChannels(this)
             Log.i(TAG, "image worker process started")
             return
         }
+
+        Notifications.ensureChannels(this)
 
         runtime = LianRuntime.get(this)
         runtime.scope.launch {

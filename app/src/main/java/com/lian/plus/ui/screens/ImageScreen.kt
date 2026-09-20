@@ -61,6 +61,8 @@ import androidx.lifecycle.viewModelScope
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.lian.plus.core.LianRuntime
+import com.lian.plus.core.model.InstalledModel
+import com.lian.plus.core.model.ModelKind
 import com.lian.plus.data.db.GeneratedImageEntity
 import com.lian.plus.image.AspectRatio
 import com.lian.plus.image.ImageEvent
@@ -71,6 +73,8 @@ import com.lian.plus.ui.components.BrandChip
 import com.lian.plus.ui.components.CircleAction
 import com.lian.plus.ui.components.GradientButton
 import com.lian.plus.ui.components.GradientIconTile
+import com.lian.plus.ui.components.ModelLoadProgress
+import com.lian.plus.ui.components.ModelPickerSheet
 import com.lian.plus.ui.theme.Lian
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -102,6 +106,32 @@ class ImageViewModel(app: Application) : AndroidViewModel(app) {
 
     val clientState = runtime.imageClient.state
     val capability = runtime.capability
+
+    /** Image models on the device, for the in-place picker. */
+    val installedModels: StateFlow<List<InstalledModel>> =
+        runtime.modelStore.observe(ModelKind.IMAGE)
+            .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+
+    private val _loadingModelId = MutableStateFlow<String?>(null)
+    val loadingModelId: StateFlow<String?> = _loadingModelId.asStateFlow()
+
+    /** Loads [model] into the worker process without leaving this screen. */
+    fun loadModel(model: InstalledModel) {
+        viewModelScope.launch {
+            _loadingModelId.value = model.id
+            val threads = capability.value?.recommendedThreads ?: 4
+            runtime.imageClient.load(model, threads = threads).fold(
+                onSuccess = {
+                    runtime.settingsStore.update { s -> s.copy(activeImageModelId = model.id) }
+                    _ui.value = _ui.value.copy(message = "${model.displayName} loaded.")
+                },
+                onFailure = { _ui.value = _ui.value.copy(message = it.message) },
+            )
+            _loadingModelId.value = null
+        }
+    }
+
+    fun dismissCrash() = runtime.imageClient.clearCrashMessage()
 
     val gallery: StateFlow<List<GeneratedImageEntity>> = runtime.database.images().observeAll()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
@@ -244,12 +274,14 @@ class ImageViewModel(app: Application) : AndroidViewModel(app) {
 }
 
 @Composable
-fun ImageScreen(vm: ImageViewModel = viewModel()) {
+fun ImageScreen(onBrowseModels: () -> Unit, vm: ImageViewModel = viewModel()) {
     val context = LocalContext.current
     val ui by vm.ui.collectAsState()
     val client by vm.clientState.collectAsState()
     val report by vm.capability.collectAsState()
     val gallery by vm.gallery.collectAsState()
+    val installedModels by vm.installedModels.collectAsState()
+    val loadingModelId by vm.loadingModelId.collectAsState()
 
     var prompt by remember { mutableStateOf("") }
     var negative by remember { mutableStateOf("blurry, low quality, watermark") }
@@ -259,6 +291,7 @@ fun ImageScreen(vm: ImageViewModel = viewModel()) {
     var cfg by remember { mutableStateOf(1.5f) }
     var sampler by remember { mutableStateOf(Sampler.EULER_A) }
     var advanced by remember { mutableStateOf(false) }
+    var showModelPicker by remember { mutableStateOf(false) }
 
     val baseSize = report?.recommendedImageSize ?: 512
     val (outW, outH) = ratio.dimensions(baseSize)
@@ -277,20 +310,53 @@ fun ImageScreen(vm: ImageViewModel = viewModel()) {
         ) {
             GradientIconTile(Icons.Default.AutoAwesome, size = 40.dp)
             Spacer(Modifier.width(12.dp))
-            Column(Modifier.weight(1f)) {
+            Column(
+                Modifier.weight(1f).clickable { showModelPicker = true },
+            ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(
+                        installedModels.firstOrNull { it.id == client.loadedModelId }?.displayName
+                            ?: "No image model",
+                        style = MaterialTheme.typography.titleMedium,
+                        color = Lian.TextPrimary,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    Icon(
+                        Icons.Default.ExpandMore,
+                        contentDescription = "Change model",
+                        tint = Lian.TextMuted,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
                 Text(
-                    "Image Generation",
-                    style = MaterialTheme.typography.titleMedium,
-                    color = Lian.TextPrimary,
-                )
-                Text(
-                    client.loadedModelId?.let { id ->
-                        "$id ${client.modelVersion.orEmpty()}".trim()
-                    } ?: "No image model loaded",
+                    client.loadedModelId?.let { client.modelVersion?.ifBlank { "Loaded" } ?: "Loaded" }
+                        ?: "Tap to choose one",
                     style = MaterialTheme.typography.labelSmall,
                     color = if (client.loadedModelId != null) Lian.Cyan else Lian.TextMuted,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+
+        // A killed worker process is not the same as the user unloading, and
+        // saying "no model loaded" would hide the difference.
+        client.crashMessage?.let { crash ->
+            BrandCard(Modifier.fillMaxWidth().padding(bottom = 12.dp), highlighted = true) {
+                Text(
+                    "Image engine stopped",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = Lian.Danger,
+                )
+                Spacer(Modifier.height(4.dp))
+                Text(crash, style = MaterialTheme.typography.bodySmall, color = Lian.TextMuted)
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    "Dismiss",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Lian.Cyan,
+                    modifier = Modifier.clickable { vm.dismissCrash() },
                 )
             }
         }
@@ -529,6 +595,37 @@ fun ImageScreen(vm: ImageViewModel = viewModel()) {
 
         Spacer(Modifier.height(28.dp))
     }
+
+    if (showModelPicker) {
+        ImageModelSheet(
+            installed = installedModels,
+            activeId = client.loadedModelId,
+            loadingId = loadingModelId,
+            onPick = { vm.loadModel(it) },
+            onBrowse = { showModelPicker = false; onBrowseModels() },
+            onDismiss = { showModelPicker = false },
+        )
+    }
+}
+
+@Composable
+private fun ImageModelSheet(
+    installed: List<InstalledModel>,
+    activeId: String?,
+    loadingId: String?,
+    onPick: (InstalledModel) -> Unit,
+    onBrowse: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    ModelPickerSheet(
+        kind = ModelKind.IMAGE,
+        installed = installed,
+        activeId = activeId,
+        loading = loadingId?.let { ModelLoadProgress(it, 0f) },
+        onPick = onPick,
+        onBrowse = onBrowse,
+        onDismiss = onDismiss,
+    )
 }
 
 /** A square style swatch; the gradient stands in for a preview thumbnail. */

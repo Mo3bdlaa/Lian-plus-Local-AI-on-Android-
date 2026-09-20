@@ -60,6 +60,21 @@ data class HfFile(
     }
 }
 
+/** A page of browse results plus the cursor that continues it. */
+data class HubPage(
+    val models: List<HfModelSummary>,
+    val nextCursor: String?,
+)
+
+/** The filter state behind the browse screen. */
+data class HubQuery(
+    val text: String = "",
+    val task: HuggingFaceApi.Task? = null,
+    val author: String = "",
+    val sort: HuggingFaceApi.SortOrder = HuggingFaceApi.SortOrder.TRENDING,
+    val limit: Int = 30,
+)
+
 data class HfRepoDetail(
     val summary: HfModelSummary,
     val ggufFiles: List<HfFile>,
@@ -79,30 +94,42 @@ class HuggingFaceApi(
 ) {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
-    /** Searches repositories that publish GGUF weights. */
+    /**
+     * Browses the Hub.
+     *
+     * Everything the website's own filter sidebar offers that is meaningful
+     * here: what the model does, who published it, how to order the results,
+     * and free text. Results are cursor-paginated, so the caller can keep
+     * asking for more rather than being capped at one page.
+     */
+    suspend fun browse(query: HubQuery, cursor: String? = null): HubPage =
+        withContext(Dispatchers.IO) {
+            val url = buildString {
+                append("$BASE/api/models?limit=").append(query.limit)
+                // Every engine in this app reads GGUF; anything else would be
+                // listed only to fail at download time.
+                append("&filter=gguf")
+                append("&sort=").append(query.sort.param)
+                append("&direction=-1")
+                query.task?.let { append("&pipeline_tag=").append(it.tag) }
+                if (query.author.isNotBlank()) append("&author=").append(encode(query.author))
+                if (query.text.isNotBlank()) append("&search=").append(encode(query.text))
+                cursor?.let { append("&cursor=").append(encode(it)) }
+            }
+            val (body, next) = getWithCursor(url)
+            HubPage(
+                models = json.decodeFromString<List<HfModelSummary>>(body),
+                nextCursor = next,
+            )
+        }
+
+    /** Kept for callers that only need a single page of text models. */
     suspend fun searchModels(
         query: String,
         limit: Int = 30,
         sort: SortOrder = SortOrder.DOWNLOADS,
-    ): List<HfModelSummary> = withContext(Dispatchers.IO) {
-        val url = buildString {
-            append("$BASE/api/models?filter=gguf&limit=$limit")
-            append("&sort=${sort.param}&direction=-1")
-            if (query.isNotBlank()) append("&search=").append(encode(query))
-        }
-        json.decodeFromString<List<HfModelSummary>>(get(url))
-    }
-
-    /** Searches repositories holding diffusion checkpoints usable by the image engine. */
-    suspend fun searchImageModels(query: String, limit: Int = 30): List<HfModelSummary> =
-        withContext(Dispatchers.IO) {
-            val url = buildString {
-                append("$BASE/api/models?limit=$limit&sort=downloads&direction=-1")
-                append("&filter=gguf")
-                append("&search=").append(encode(query.ifBlank { "stable diffusion" }))
-            }
-            json.decodeFromString<List<HfModelSummary>>(get(url))
-        }
+    ): List<HfModelSummary> =
+        browse(HubQuery(text = query, limit = limit, sort = sort)).models
 
     /** Lists the files in a repository, with real (post-LFS) sizes. */
     suspend fun repoFiles(repoId: String): HfRepoDetail = withContext(Dispatchers.IO) {
@@ -146,6 +173,28 @@ class HuggingFaceApi(
         }.getOrNull()
     }
 
+    /** Performs a GET and extracts the `cursor=` value from the Link header. */
+    private fun getWithCursor(url: String): Pair<String, String?> {
+        val req = Request.Builder().url(url).apply {
+            header("User-Agent", USER_AGENT)
+            tokenProvider()?.let { header("Authorization", "Bearer $it") }
+        }.build()
+        client.newCall(req).execute().use { resp ->
+            val body = resp.body?.string().orEmpty()
+            if (!resp.isSuccessful) {
+                throw IOException("HTTP ${resp.code}: ${body.take(200)}")
+            }
+            val next = resp.header("link")
+                ?.split(',')
+                ?.firstOrNull { it.contains("rel=\"next\"") }
+                ?.substringAfter("cursor=")
+                ?.substringBefore('>')
+                ?.substringBefore('&')
+                ?.let { java.net.URLDecoder.decode(it, "UTF-8") }
+            return body to next
+        }
+    }
+
     private fun get(url: String): String {
         val req = Request.Builder().url(url).apply {
             header("User-Agent", USER_AGENT)
@@ -164,10 +213,18 @@ class HuggingFaceApi(
 
     private fun encode(s: String): String = java.net.URLEncoder.encode(s, "UTF-8")
 
-    enum class SortOrder(val param: String) {
-        DOWNLOADS("downloads"),
-        LIKES("likes"),
-        RECENT("lastModified"),
+    enum class SortOrder(val param: String, val label: String) {
+        TRENDING("trendingScore", "Trending"),
+        DOWNLOADS("downloads", "Most downloaded"),
+        LIKES("likes", "Most liked"),
+        RECENT("lastModified", "Recently updated"),
+    }
+
+    /** The Hub's pipeline tags, limited to the ones this app can actually run. */
+    enum class Task(val tag: String, val label: String) {
+        TEXT("text-generation", "Text"),
+        IMAGE("text-to-image", "Image"),
+        EMBEDDING("sentence-similarity", "Embedding"),
     }
 
     companion object {
