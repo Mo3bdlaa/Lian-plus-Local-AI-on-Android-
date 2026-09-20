@@ -128,3 +128,31 @@ curl localhost:8080/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"messages":[{"role":"user","content":"Say hello"}]}'
 ```
+
+## Publishing a release
+
+Tag and push; CI does the rest:
+
+```bash
+git tag -a v0.2.0 -m "Lian+ v0.2.0"
+git push origin v0.2.0
+```
+
+`.github/workflows/release.yml` checks out the tag with submodules, installs the
+NDK, runs the unit tests, builds the release APK, and creates a GitHub release
+with the APK attached and its SHA-256 in the notes. Put hand-written notes in
+`.github/release-notes/<tag>.md` and they are used verbatim.
+
+Without signing secrets the workflow generates a throwaway debug key so the APK
+is at least installable, and says so in the release notes. To sign properly, set
+four repository secrets:
+
+| Secret | Value |
+|---|---|
+| `KEYSTORE_BASE64` | `base64 -w0 release.jks` |
+| `KEYSTORE_PASSWORD` | the store password |
+| `KEY_ALIAS` | the key alias |
+| `KEY_PASSWORD` | the key password |
+
+The same workflow can be started by hand from the Actions tab, which is the way
+to re-run a publish without moving the tag.

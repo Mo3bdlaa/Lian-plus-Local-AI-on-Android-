@@ -1,0 +1,160 @@
+name: Release
+
+# Publishing is driven by the tag: push v1.2.3 and this builds the APK, runs the
+# tests and attaches the result to a GitHub release of the same name.
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag to build and publish (e.g. v0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Resolve the tag
+        id: tag
+        run: |
+          TAG="${{ github.event.inputs.tag || github.ref_name }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.tag.outputs.tag }}
+          # llama.cpp and stable-diffusion.cpp are submodules, and the latter
+          # has submodules of its own.
+          submodules: recursive
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install the NDK and CMake
+        run: |
+          sdkmanager --install \
+            "ndk;27.2.12479018" \
+            "cmake;3.22.1" \
+            "platforms;android-35" \
+            "build-tools;35.0.0"
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle.kts', 'gradle/libs.versions.toml') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      # The engines are compiled from source, so this dominates the run. The
+      # key covers the submodule revisions: a new engine revision must rebuild.
+      - name: Cache the native build
+        uses: actions/cache@v4
+        with:
+          path: app/.cxx
+          key: cxx-${{ runner.os }}-${{ hashFiles('.gitmodules', 'app/src/main/cpp/CMakeLists.txt') }}-${{ hashFiles('app/src/main/cpp/*.cpp', 'app/src/main/cpp/*.h') }}
+          restore-keys: cxx-${{ runner.os }}-
+
+      - name: Unit tests
+        run: ./gradlew testDebugUnitTest --console=plain
+
+      - name: Set up signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            cat > keystore.properties <<EOF
+          storeFile=$RUNNER_TEMP/release.jks
+          storePassword=$KEYSTORE_PASSWORD
+          keyAlias=$KEY_ALIAS
+          keyPassword=$KEY_PASSWORD
+          EOF
+            echo "signed=release" >> "$GITHUB_ENV"
+          else
+            # No keystore configured: fall back to a generated debug key so the
+            # APK is at least installable. Flagged in the release notes.
+            keytool -genkeypair -v -keystore "$RUNNER_TEMP/debug.jks" \
+              -storepass android -keypass android -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug, O=Android, C=US"
+            cat > keystore.properties <<EOF
+          storeFile=$RUNNER_TEMP/debug.jks
+          storePassword=android
+          keyAlias=androiddebugkey
+          keyPassword=android
+          EOF
+            echo "signed=debug" >> "$GITHUB_ENV"
+            echo "::warning::No KEYSTORE_BASE64 secret set - signing with a throwaway debug key."
+          fi
+
+      - name: Build the release APK
+        run: ./gradlew assembleRelease --console=plain
+
+      - name: Name and checksum the artifact
+        id: artifact
+        run: |
+          SRC=$(find app/build/outputs/apk/release -name '*.apk' | head -1)
+          NAME="lian-plus-${{ steps.tag.outputs.tag }}-arm64-v8a.apk"
+          mkdir -p dist && cp "$SRC" "dist/$NAME"
+          SHA=$(sha256sum "dist/$NAME" | cut -d' ' -f1)
+          echo "name=$NAME" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "size=$(du -h "dist/$NAME" | cut -f1)" >> "$GITHUB_OUTPUT"
+
+      - name: Assemble the release notes
+        id: notes
+        run: |
+          NOTES=".github/release-notes/${{ steps.tag.outputs.tag }}.md"
+          OUT="$RUNNER_TEMP/notes.md"
+          if [ -f "$NOTES" ]; then
+            cp "$NOTES" "$OUT"
+          else
+            printf '## Lian+ %s\n\nSee the commit history for what changed.\n' \
+              "${{ steps.tag.outputs.tag }}" > "$OUT"
+          fi
+          {
+            printf '\n---\n\n'
+            printf '`%s` · %s · SHA-256 `%s`\n' \
+              "${{ steps.artifact.outputs.name }}" \
+              "${{ steps.artifact.outputs.size }}" \
+              "${{ steps.artifact.outputs.sha }}"
+            if [ "$signed" = "debug" ]; then
+              printf '\nSigned with a throwaway debug key, so this is a sideload build '
+              printf 'rather than something to redistribute. Set the `KEYSTORE_BASE64`, '
+              printf '`KEYSTORE_PASSWORD`, `KEY_ALIAS` and `KEY_PASSWORD` repository '
+              printf 'secrets to sign properly.\n'
+            fi
+          } >> "$OUT"
+          echo "path=$OUT" >> "$GITHUB_OUTPUT"
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="${{ steps.tag.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "dist/${{ steps.artifact.outputs.name }}" --clobber
+            gh release edit "$TAG" --notes-file "${{ steps.notes.outputs.path }}"
+          else
+            gh release create "$TAG" "dist/${{ steps.artifact.outputs.name }}" \
+              --title "Lian+ $TAG" \
+              --notes-file "${{ steps.notes.outputs.path }}"
+          fi
