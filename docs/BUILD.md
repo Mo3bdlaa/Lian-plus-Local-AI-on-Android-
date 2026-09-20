@@ -129,6 +129,37 @@ curl localhost:8080/v1/chat/completions \
   -d '{"messages":[{"role":"user","content":"Say hello"}]}'
 ```
 
+## Versioning
+
+`versionName` comes from the tag and `versionCode` is derived from it:
+`0.2.3` becomes `20003`. Android refuses to install a package whose
+`versionCode` is not greater than the installed one, so this is what makes an
+update install over the previous build instead of being rejected.
+
+Local builds default to `0.1.0`; override with
+`-Plian.versionName=1.2.3` when you need to check a specific version.
+
+## Signing
+
+The APK's signing key is the app's permanent identity. Every update has to be
+signed with the same key or Android treats it as a different app and refuses to
+install over the existing one — and there is no recovery from losing it beyond
+asking people to uninstall, which wipes their chats and downloaded models.
+
+Create one once:
+
+```bash
+keytool -genkeypair -v -keystore lian-release.jks -storetype PKCS12 \
+  -alias lian-release -keyalg RSA -keysize 4096 -validity 10950 \
+  -dname 'CN=Your Name, O=Lian\+, C=EG'
+```
+
+Note the escaped `+`: X.500 treats it as a separator between name components,
+so an unescaped one fails with "empty AVA in RDN".
+
+For local release builds, put a `keystore.properties` in the project root (it is
+gitignored). For CI, set the four repository secrets listed below.
+
 ## Publishing a release
 
 Tag and push; CI does the rest:

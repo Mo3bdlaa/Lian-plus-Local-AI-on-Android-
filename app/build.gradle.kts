@@ -13,6 +13,24 @@ val abis = providers.gradleProperty("lian.abiFilters").getOrElse("arm64-v8a")
     .split(",").map { it.trim() }.filter { it.isNotEmpty() }
 
 // Optional release signing: drop a keystore.properties next to this file (gitignored).
+/**
+ * The version comes from the release tag, so an update is always a higher
+ * versionCode than the build it replaces. Android refuses to install over a
+ * package whose versionCode is not greater, so leaving this hardcoded would
+ * mean every release after the first had to be installed by hand.
+ *
+ * 0.2.3 becomes 20003: two digits each for minor and patch leaves room without
+ * the number ever having to go backwards.
+ */
+val appVersionName = providers.gradleProperty("lian.versionName").getOrElse("0.1.0")
+
+val appVersionCode = Regex("""^(\d+)\.(\d+)\.(\d+)""").find(appVersionName)
+    ?.destructured
+    ?.let { (major, minor, patch) ->
+        major.toInt() * 100_000 + minor.toInt() * 1_000 + patch.toInt()
+    }
+    ?: error("lian.versionName must look like 1.2.3, got '$appVersionName'")
+
 val keystoreProps = Properties().apply {
     val f = rootProject.file("keystore.properties")
     if (f.exists()) f.inputStream().use { load(it) }
@@ -27,8 +45,8 @@ android {
         applicationId = "com.lian.plus"
         minSdk = 29
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = appVersionCode
+        versionName = appVersionName
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 

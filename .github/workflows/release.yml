@@ -118,7 +118,9 @@ jobs:
           fi
 
       - name: Build the release APK
-        run: ./gradlew assembleRelease --console=plain
+        # The tag drives versionName and, through it, versionCode - so an
+        # update always outranks the build it replaces.
+        run: ./gradlew assembleRelease --console=plain -Plian.versionName=${{ steps.tag.outputs.version }}
 
       - name: Name and checksum the artifact
         id: artifact
