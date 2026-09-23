@@ -14,6 +14,8 @@ data class DownloadJob(
     val url: String,
     val fileName: String,
     val repoId: String?,
+    /** The file's path inside the repository, folders included. */
+    val repoPath: String? = null,
     val kind: ModelKind,
     val targetPath: String,
     val totalBytes: Long,

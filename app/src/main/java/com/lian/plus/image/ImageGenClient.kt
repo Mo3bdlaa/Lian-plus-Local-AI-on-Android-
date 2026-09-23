@@ -6,7 +6,10 @@ import android.content.Intent
 import android.content.ServiceConnection
 import android.os.IBinder
 import android.util.Log
+import com.lian.plus.core.model.ImageComponent
+import com.lian.plus.core.model.ImagePipeline
 import com.lian.plus.core.model.InstalledModel
+import com.lian.plus.core.model.ModelStore
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
@@ -74,6 +77,9 @@ class ImageGenClient(private val context: Context) {
     private var service: IImageGenService? = null
     private var connection: ServiceConnection? = null
 
+    /** Read-only here: used to find the companion files a checkpoint needs. */
+    private val models by lazy { ModelStore(context) }
+
     private val _state = MutableStateFlow(State())
     val state: StateFlow<State> = _state.asStateFlow()
 
@@ -132,25 +138,62 @@ class ImageGenClient(private val context: Context) {
         runCatching { connect()?.engineInfo() }.getOrNull() ?: "image engine unavailable"
     }
 
-    /** Loads [model], optionally with a separate VAE or TAESD file. */
+    /**
+     * Loads [model] together with whatever companion files it needs.
+     *
+     * The pipeline is resolved here rather than at each call site so that
+     * every path into the engine — the Images screen, the chat composer, the
+     * HTTP server — gets the same answer, including the same refusal when a
+     * piece is missing.
+     */
     suspend fun load(
         model: InstalledModel,
-        vae: InstalledModel? = null,
-        taesd: InstalledModel? = null,
         threads: Int,
         flashAttention: Boolean = true,
         convDirect: Boolean = true,
     ): Result<String> {
+        val pipeline = withContext(Dispatchers.IO) { models.pipelineFor(model) }
+        return load(pipeline, threads, flashAttention, convDirect)
+    }
+
+    suspend fun load(
+        pipeline: ImagePipeline,
+        threads: Int,
+        flashAttention: Boolean = true,
+        convDirect: Boolean = true,
+    ): Result<String> {
+        // Refusing here, by name, beats letting the engine fail on two thirds
+        // of a model and reporting whatever it says on the way down.
+        if (!pipeline.isComplete) {
+            return Result.failure(
+                IllegalStateException(
+                    "${pipeline.primary.displayName} is a ${pipeline.arch.label} " +
+                        "pipeline and still needs its ${pipeline.missingLabel}. " +
+                        "Both usually sit in the same repository as the checkpoint.",
+                ),
+            )
+        }
+
         val svc = connect()
             ?: return Result.failure(IllegalStateException("could not start the image process"))
         // loadModel reads gigabytes off disk and returns only when it is done;
         // on the main thread that is an ANR, not a slow call.
         return withContext(Dispatchers.IO) {
             runCatching {
+                val model = pipeline.primary
+                // A bare transformer handed over as a checkpoint is exactly the
+                // failure this whole path exists to avoid, so which slot it
+                // goes in follows from the detected family, not from a guess.
+                val asCheckpoint = !pipeline.arch.isDiffusionOnly
                 val ok = svc.loadModel(
-                    model.filePath,
-                    vae?.filePath.orEmpty(),
-                    taesd?.filePath.orEmpty(),
+                    if (asCheckpoint) model.filePath else "",
+                    if (asCheckpoint) "" else model.filePath,
+                    pipeline.pathOf(ImageComponent.VAE),
+                    pipeline.pathOf(ImageComponent.TAESD),
+                    pipeline.pathOf(ImageComponent.CLIP_L),
+                    pipeline.pathOf(ImageComponent.CLIP_G),
+                    pipeline.pathOf(ImageComponent.T5XXL),
+                    pipeline.pathOf(ImageComponent.LLM),
                     threads,
                     flashAttention,
                     convDirect,

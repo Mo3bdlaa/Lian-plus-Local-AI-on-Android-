@@ -73,6 +73,8 @@ data class ModelEntity(
     val chatTemplate: String?,
     val role: String = "STANDALONE",
     val component: String?,
+    /** Diffusion family, so the pipeline it needs is known without re-reading. */
+    val diffusionArch: String? = null,
     val addedAt: Long = System.currentTimeMillis(),
     val lastUsedAt: Long? = null,
 )

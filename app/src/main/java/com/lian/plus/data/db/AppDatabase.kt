@@ -17,7 +17,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
         MemoryEntity::class,
         GeneratedImageEntity::class,
     ],
-    version = 3,
+    version = 4,
     exportSchema = true,
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -51,6 +51,18 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        /**
+         * Records which diffusion family an image model belongs to.
+         *
+         * Existing rows get null and are re-detected the next time the store
+         * syncs, which costs one header read per file.
+         */
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE installed_models ADD COLUMN diffusionArch TEXT")
+            }
+        }
+
         @Volatile private var instance: AppDatabase? = null
 
         fun get(context: Context): AppDatabase = instance ?: synchronized(this) {
@@ -59,7 +71,7 @@ abstract class AppDatabase : RoomDatabase() {
                 AppDatabase::class.java,
                 "lian.db",
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
                 .build()
                 .also { instance = it }
         }

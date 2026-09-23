@@ -38,6 +38,14 @@ class ModelStore(private val context: Context) {
     suspend fun byId(id: String): InstalledModel? =
         withContext(Dispatchers.IO) { dao.byId(id)?.toModel() }
 
+    /** Everything installed, for resolving a pipeline against what is present. */
+    suspend fun all(): List<InstalledModel> =
+        withContext(Dispatchers.IO) { dao.all().map { it.toModel() } }
+
+    /** The checkpoint plus whichever companion files it needs and we have. */
+    suspend fun pipelineFor(model: InstalledModel): ImagePipeline =
+        ImagePipelineResolver.resolve(model, all())
+
     suspend fun markUsed(id: String) = withContext(Dispatchers.IO) { dao.markUsed(id) }
 
     /**
@@ -52,6 +60,8 @@ class ModelStore(private val context: Context) {
         repoId: String?,
         displayName: String? = null,
         component: ImageComponent? = null,
+        /** The path inside the repository, when it differs from the file name. */
+        relativeName: String? = null,
     ): InstalledModel = withContext(Dispatchers.IO) {
         val info = if (file.name.endsWith(".gguf", ignoreCase = true)) {
             GgufInspector.inspect(file)
@@ -68,12 +78,29 @@ class ModelStore(private val context: Context) {
         // it a model only defers the failure to load time.
         val role = GgufRoleDetector.roleFromMetadata(info, file.name)
 
+        // A companion file is recognised by name and by the folder it came
+        // from, which repositories are consistent about: `vae/`,
+        // `text_encoders/`. Left to the caller this was only ever set for
+        // files downloaded through the picker, so a sideloaded VAE looked like
+        // a checkpoint that would not load.
+        val part = component ?: DiffusionArchDetector.componentOf(relativeName ?: file.name)
+        val effectiveKind = when {
+            part == null -> kind
+            // A Qwen chat model doubles as the text encoder for Qwen-Image and
+            // Z-Image. Recording that it can serve as one must not stop it
+            // being a chat model, or the user loses it from the chat picker
+            // and pays for the same weights twice.
+            part == ImageComponent.LLM && kind == ModelKind.TEXT -> ModelKind.TEXT
+            kind == ModelKind.IMAGE -> ModelKind.IMAGE_COMPONENT
+            else -> kind
+        }
+
         val model = InstalledModel(
             id = id,
             displayName = displayName
                 ?: info?.name
                 ?: file.name.removeSuffix(".gguf").replace('-', ' '),
-            kind = kind,
+            kind = effectiveKind,
             filePath = file.absolutePath,
             sizeBytes = file.length(),
             repoId = repoId,
@@ -87,7 +114,12 @@ class ModelStore(private val context: Context) {
             embeddingDim = info?.embeddingLength,
             chatTemplate = info?.chatTemplate,
             role = role,
-            component = component,
+            component = part,
+            diffusionArch = if (effectiveKind == ModelKind.IMAGE) {
+                DiffusionArchDetector.detect(info, file.name)
+            } else {
+                null
+            },
         )
         dao.upsert(model.toEntity())
         Log.i(TAG, "registered ${model.displayName} (${model.sizeLabel})")
@@ -123,13 +155,24 @@ class ModelStore(private val context: Context) {
         for (kind in ModelKind.entries) {
             val dir = dirFor(kind)
             dir.listFiles()?.forEach { f ->
-                if (f.isFile && f.name.endsWith(".gguf", true) && f.absolutePath !in known) {
+                if (f.isFile && isWeightFile(f.name) && f.absolutePath !in known) {
                     runCatching { register(f, kind, repoId = null) }
                         .onFailure { Log.w(TAG, "could not adopt ${f.name}: ${it.message}") }
                 }
             }
         }
     }
+
+    /**
+     * Files the engines can read. `.safetensors` matters for image pipelines:
+     * the VAE and text encoder of a Qwen-Image or Z-Image repository are
+     * published in that format, not as GGUF, and the diffusion engine loads
+     * them directly.
+     */
+    fun isWeightFile(name: String): Boolean =
+        name.endsWith(".gguf", true) ||
+            name.endsWith(".safetensors", true) ||
+            name.endsWith(".sft", true)
 
     /**
      * True once every shard of a split model sits beside [first].
@@ -141,9 +184,10 @@ class ModelStore(private val context: Context) {
     fun splitSetComplete(first: File): Boolean {
         val total = GgufRoleDetector.shardTotal(first.name) ?: return true
         val base = GgufRoleDetector.splitBaseName(first.name) ?: return true
+        val ext = GgufRoleDetector.shardExtension(first.name) ?: "gguf"
         val dir = first.parentFile ?: return false
         return (1..total).all { index ->
-            File(dir, "%s-%05d-of-%05d.gguf".format(base, index, total)).exists()
+            File(dir, "%s-%05d-of-%05d.%s".format(base, index, total, ext)).exists()
         }
     }
 
@@ -178,6 +222,9 @@ class ModelStore(private val context: Context) {
         chatTemplate = chatTemplate,
         role = runCatching { GgufRole.valueOf(role) }.getOrDefault(GgufRole.STANDALONE),
         component = component?.let { runCatching { ImageComponent.valueOf(it) }.getOrNull() },
+        diffusionArch = diffusionArch?.let {
+            runCatching { DiffusionArch.valueOf(it) }.getOrNull()
+        },
         addedAtMillis = addedAt,
     )
 
@@ -197,6 +244,7 @@ class ModelStore(private val context: Context) {
         chatTemplate = chatTemplate,
         role = role.name,
         component = component?.name,
+        diffusionArch = diffusionArch?.name,
         addedAt = addedAtMillis,
     )
 

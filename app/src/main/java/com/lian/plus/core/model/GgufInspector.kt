@@ -20,6 +20,9 @@ object GgufInspector {
     private const val TAG = "LianGguf"
     private const val MAGIC = 0x46554747 // "GGUF" little-endian
 
+    /** Enough to carry every family marker; the rest is noise. */
+    private const val MAX_TENSOR_NAMES = 400L
+
     // ggml_type values used for the whole-file "file type" key.
     private val FILE_TYPE_NAMES = mapOf(
         0 to "F32", 1 to "F16", 2 to "Q4_0", 3 to "Q4_1", 7 to "Q8_0",
@@ -46,6 +49,13 @@ object GgufInspector {
         /** `split.count` — present only on the shards of a split model. */
         val splitCount: Int?,
         val metadata: Map<String, String>,
+        /**
+         * The first few tensor names, which for a diffusion checkpoint are the
+         * only reliable way to tell the family: the Z-Image GGUFs carry no
+         * key/value metadata whatsoever, and the engine itself identifies them
+         * from these names.
+         */
+        val tensorNames: List<String> = emptyList(),
     ) {
         /**
          * Bytes of KV cache for [contextSize] tokens at [bytesPerElement] per
@@ -114,6 +124,12 @@ object GgufInspector {
             .associate { (k, v) -> k to v.toString() }
             .filterValues { it.length <= 200 }
 
+        // The tensor section follows the key/value block directly, so the
+        // names cost one more pass over a few kilobytes. Only a prefix is
+        // read: the markers that identify a family are all near the front, and
+        // a 300-tensor model would otherwise add nothing but noise.
+        val tensorNames = readTensorNames(buf, version, minOf(tensorCount, MAX_TENSOR_NAMES))
+
         return Info(
             version = version,
             tensorCount = tensorCount,
@@ -131,7 +147,33 @@ object GgufInspector {
                 ?: intFor("vocab_size"),
             splitCount = (kv["split.count"] as? Number)?.toInt(),
             metadata = displayMeta,
+            tensorNames = tensorNames,
         )
+    }
+
+    /**
+     * Walks the tensor directory, collecting names and skipping the rest.
+     *
+     * Each entry is: name, dimension count, that many dimensions, a type, and
+     * an offset. Nothing here touches tensor *data* — the offsets point past
+     * the header into the part of the file we never map.
+     */
+    private fun readTensorNames(buf: ByteBuffer, version: Int, count: Long): List<String> {
+        val names = ArrayList<String>(count.toInt().coerceAtMost(512))
+        for (i in 0 until count) {
+            val name = readString(buf) ?: break
+            if (buf.remaining() < 4) break
+            val nDims = buf.int
+            if (nDims < 0 || nDims > 8) break
+            // GGUF v1 wrote dimensions as uint32; v2 onwards uses uint64.
+            val dimBytes = if (version == 1) 4 * nDims else 8 * nDims
+            if (buf.remaining() < dimBytes + 12) break
+            buf.position(buf.position() + dimBytes)
+            buf.int          // ggml type
+            buf.long         // offset into the data section
+            names += name
+        }
+        return names
     }
 
     private fun readString(buf: ByteBuffer): String? {

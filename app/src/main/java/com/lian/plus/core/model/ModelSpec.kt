@@ -12,8 +12,14 @@ enum class ModelKind {
     IMAGE_COMPONENT,
 }
 
-/** Which component of an image pipeline a companion file provides. */
-enum class ImageComponent { VAE, TAESD, CLIP_L, CLIP_G, T5XXL, DIFFUSION, UPSCALER }
+/**
+ * Which component of an image pipeline a companion file provides.
+ *
+ * `LLM` is the text encoder of the newer families — Qwen-Image and Z-Image
+ * both condition on a Qwen language model rather than on CLIP or T5 — and maps
+ * to stable-diffusion.cpp's own `llm_path`.
+ */
+enum class ImageComponent { VAE, TAESD, CLIP_L, CLIP_G, T5XXL, LLM, DIFFUSION, UPSCALER }
 
 /**
  * Quantisation, ordered from smallest to largest. The ordering is what the
@@ -71,6 +77,8 @@ data class InstalledModel(
     /** What the file is: a model, or a companion that cannot load on its own. */
     val role: GgufRole = GgufRole.STANDALONE,
     val component: ImageComponent? = null,
+    /** For an image model, which family it is and therefore what it needs. */
+    val diffusionArch: DiffusionArch? = null,
     val addedAtMillis: Long = System.currentTimeMillis(),
 ) {
     val sizeLabel: String get() = formatBytes(sizeBytes)

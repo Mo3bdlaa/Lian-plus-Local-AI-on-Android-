@@ -26,6 +26,16 @@ object SdNative {
     external fun systemInfo(): String
     external fun physicalCores(): Int
 
+    /**
+     * Builds an engine context from a pipeline.
+     *
+     * [modelPath] is a complete checkpoint — SD 1.5, SDXL — and
+     * [diffusionPath] is the transformer of a split pipeline. Exactly one of
+     * the two is set: handing a bare transformer over as a checkpoint is what
+     * produces a load failure with nothing to explain it.
+     *
+     * [llmPath] is the Qwen text encoder used by Qwen-Image and Z-Image.
+     */
     external fun loadContext(
         modelPath: String,
         vaePath: String,
@@ -33,6 +43,7 @@ object SdNative {
         clipLPath: String,
         clipGPath: String,
         t5Path: String,
+        llmPath: String,
         diffusionPath: String,
         nThreads: Int,
         /** sd_type_t, or -1 to keep the file's own quantisation. */

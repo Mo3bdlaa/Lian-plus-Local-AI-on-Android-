@@ -6,8 +6,13 @@ interface IImageGenService {
     boolean isEngineAvailable();
     String engineInfo();
 
-    // Companion paths may be empty strings when the checkpoint is self-contained.
-    boolean loadModel(String modelPath, String vaePath, String taesdPath,
+    // A pipeline, not a file. modelPath carries a complete checkpoint (SD 1.5,
+    // SDXL); diffusionPath carries the transformer of a split pipeline
+    // (Qwen-Image, Z-Image, Flux) whose encoders and VAE arrive beside it.
+    // Exactly one of the two is set, and unused companions are empty strings.
+    boolean loadModel(String modelPath, String diffusionPath,
+                      String vaePath, String taesdPath,
+                      String clipLPath, String clipGPath, String t5Path, String llmPath,
                       int threads, boolean flashAttn, boolean convDirect);
     // oneway: unload waits on the worker thread, which may be minutes into a
     // generation. The caller must never block on that.

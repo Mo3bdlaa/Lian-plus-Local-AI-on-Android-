@@ -56,12 +56,16 @@ class ModelResidency(
     fun residentBytes(): Long {
         var total = 0L
         runtime.llm.loaded.value?.let { total += it.model.sizeBytes }
-        residentImage?.let { total += it.sizeBytes }
+        // Plus whatever companion files the image pipeline pulled in with it.
+        residentImage?.let { total += it.sizeBytes + residentImageExtraBytes }
         residentEmbedding?.let { total += it.sizeBytes }
         return total
     }
 
     private var residentImage: InstalledModel? = null
+
+    /** Extra bytes held by the companion files of the resident image model. */
+    @Volatile private var residentImageExtraBytes: Long = 0
     private var residentEmbedding: InstalledModel? = null
 
     fun loadedText(): InstalledModel? = runtime.llm.loaded.value?.model
@@ -87,7 +91,16 @@ class ModelResidency(
     suspend fun ensure(model: InstalledModel): Result<InstalledModel?> = lock.withLock {
         if (alreadyResident(model)) return@withLock Result.success(null)
 
-        val fit = budget.evaluate(model.sizeBytes, residentBytes())
+        // The question is what has to be resident, which for a split image
+        // pipeline is the transformer plus its text encoder and VAE. Judging a
+        // Qwen-Image checkpoint on its own weights alone says a 4 GB file fits
+        // when the set is nearer fourteen.
+        val pipeline = if (model.kind == ModelKind.IMAGE) {
+            runCatching { runtime.modelStore.pipelineFor(model) }.getOrNull()
+        } else null
+        val residentCost = pipeline?.totalBytes ?: model.sizeBytes
+
+        val fit = budget.evaluate(residentCost, residentBytes())
         var evicted: InstalledModel? = null
 
         if (fit.needsEviction) {
@@ -100,7 +113,13 @@ class ModelResidency(
             // shortfall is small, since mmap'd weights degrade to paging
             // rather than failing outright. A large shortfall is a refusal.
             val snap = fit.snapshot
-            val message = "${model.displayName} needs ${model.sizeLabel} but only " +
+            val needed = if (pipeline != null && pipeline.parts.isNotEmpty()) {
+                "${formatBytes(residentCost)} for the whole ${pipeline.arch.label} " +
+                    "pipeline (${pipeline.parts.size + 1} files)"
+            } else {
+                model.sizeLabel
+            }
+            val message = "${model.displayName} needs $needed but only " +
                 "${formatBytes(snap.freeForNewModel)} is free. Close some apps, or " +
                 "pick a smaller model."
             _state.value = State.Failed(model, message)
@@ -120,9 +139,16 @@ class ModelResidency(
 
             ModelKind.IMAGE -> {
                 val threads = runtime.capability.value?.recommendedThreads ?: 4
-                runtime.imageClient.load(model, threads = threads)
-                    .onSuccess { residentImage = model }
-                    .map { }
+                val load = if (pipeline != null) {
+                    runtime.imageClient.load(pipeline, threads = threads)
+                } else {
+                    runtime.imageClient.load(model, threads = threads)
+                }
+                load.onSuccess {
+                    residentImage = model
+                    residentImageExtraBytes = (pipeline?.totalBytes ?: model.sizeBytes) -
+                        model.sizeBytes
+                }.map { }
             }
 
             ModelKind.IMAGE_COMPONENT ->
@@ -146,6 +172,7 @@ class ModelResidency(
         runtime.llm.unload()
         runtime.imageClient.releaseProcess()
         residentImage = null
+        residentImageExtraBytes = 0
         _state.value = State.Idle
     }
 
@@ -187,6 +214,7 @@ class ModelResidency(
             ModelKind.IMAGE -> {
                 runtime.imageClient.releaseProcess()
                 residentImage = null
+                residentImageExtraBytes = 0
             }
             ModelKind.EMBEDDING -> {
                 runtime.embedder.unload()

@@ -84,7 +84,8 @@ JNIEXPORT jlong JNICALL
 Java_com_lian_plus_image_SdNative_loadContext(JNIEnv *env, jobject,
                                               jstring jmodel, jstring jvae, jstring jtaesd,
                                               jstring jclipL, jstring jclipG, jstring jt5,
-                                              jstring jdiffusion, jint nThreads, jint wtype,
+                                              jstring jllm, jstring jdiffusion,
+                                              jint nThreads, jint wtype,
                                               jboolean flashAttn, jboolean convDirect,
                                               jboolean mmap) {
     sd_set_log_callback(sd_log, nullptr);
@@ -96,6 +97,9 @@ Java_com_lian_plus_image_SdNative_loadContext(JNIEnv *env, jobject,
     const std::string clip_l    = to_string(env, jclipL);
     const std::string clip_g    = to_string(env, jclipG);
     const std::string t5        = to_string(env, jt5);
+    // Qwen-Image and Z-Image condition on a Qwen language model rather than on
+    // CLIP or T5, which the library takes through its own parameter.
+    const std::string llm       = to_string(env, jllm);
     const std::string diffusion = to_string(env, jdiffusion);
 
     sd_ctx_params_t p;
@@ -107,6 +111,7 @@ Java_com_lian_plus_image_SdNative_loadContext(JNIEnv *env, jobject,
     p.clip_l_path           = opt(clip_l);
     p.clip_g_path           = opt(clip_g);
     p.t5xxl_path            = opt(t5);
+    p.llm_path              = opt(llm);
     p.diffusion_model_path  = opt(diffusion);
     p.n_threads             = nThreads;
     p.wtype                 = wtype < 0 ? SD_TYPE_COUNT : static_cast<enum sd_type_t>(wtype);
@@ -121,7 +126,8 @@ Java_com_lian_plus_image_SdNative_loadContext(JNIEnv *env, jobject,
 
     sd_ctx_t *ctx = new_sd_ctx(&p);
     if (ctx == nullptr) {
-        LIANE("new_sd_ctx failed for %s", model.c_str());
+        LIANE("new_sd_ctx failed for %s",
+              model.empty() ? diffusion.c_str() : model.c_str());
         return 0;
     }
     auto *s = new lian_sd();

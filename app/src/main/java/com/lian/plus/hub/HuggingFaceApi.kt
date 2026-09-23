@@ -1,7 +1,10 @@
 package com.lian.plus.hub
 
+import com.lian.plus.core.model.DiffusionArch
+import com.lian.plus.core.model.DiffusionArchDetector
 import com.lian.plus.core.model.GgufRole
 import com.lian.plus.core.model.GgufRoleDetector
+import com.lian.plus.core.model.ImageComponent
 import com.lian.plus.core.model.Quant
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
@@ -58,9 +61,21 @@ data class HfFile(
         get() = SPLIT_REGEX.find(fileName)?.groupValues?.get(1)?.toIntOrNull() == 1
 
     companion object {
-        private val SPLIT_REGEX = Regex("""-(\d{5})-of-(\d{5})\.gguf$""", RegexOption.IGNORE_CASE)
+        // Any extension: a Hub repository splits safetensors the same way,
+        // and offering part one of three as a download is the bug this
+        // pattern exists to prevent.
+        private val SPLIT_REGEX = Regex(
+            """-(\d{5})-of-(\d{5})\.(gguf|safetensors|sft)$""",
+            RegexOption.IGNORE_CASE,
+        )
     }
 }
+
+/** Files an engine can load: GGUF for text, either format for diffusion. */
+private fun isWeightFile(path: String): Boolean =
+    path.endsWith(".gguf", ignoreCase = true) ||
+        path.endsWith(".safetensors", ignoreCase = true) ||
+        path.endsWith(".sft", ignoreCase = true)
 
 /** A page of browse results plus the cursor that continues it. */
 data class HubPage(
@@ -91,9 +106,18 @@ data class HfAsset(
     val totalBytes: Long,
     val quant: Quant,
     val role: GgufRole,
+    /** Set when this is a companion file rather than something to load. */
+    val component: ImageComponent? = null,
+    /** Set when this is a diffusion checkpoint, saying what else it needs. */
+    val arch: DiffusionArch? = null,
+    /** Overrides the role's generic explanation when there is a better one. */
+    val note: String? = null,
 ) {
     val isSplit: Boolean get() = files.size > 1
     val primary: HfFile get() = files.first()
+
+    /** A pipeline part this checkpoint needs the user to fetch as well. */
+    val requires: Set<ImageComponent> get() = arch?.required.orEmpty()
 }
 
 data class HfRepoDetail(
@@ -162,11 +186,16 @@ class HuggingFaceApi(
             .filter { it.type == "file" }
             .map { HfFile(repoId, it.path, it.realSize, Quant.fromFileName(it.path)) }
 
-        val gguf = files.filter { it.path.endsWith(".gguf", ignoreCase = true) }
+        // `.safetensors` is included because the VAE and text encoder of a
+        // Qwen-Image or Z-Image repository are published in that format, and
+        // the diffusion engine reads it directly. Filtering to GGUF meant the
+        // two thirds of those pipelines that are not the transformer were
+        // invisible in the browser.
+        val weights = files.filter { isWeightFile(it.path) }
 
         // Shards of one model collapse into a single asset carrying every part;
         // everything else is an asset of one.
-        val (shards, singles) = gguf.partition { it.isSplitShard }
+        val (shards, singles) = weights.partition { it.isSplitShard }
         val splitAssets = shards
             .groupBy { GgufRoleDetector.splitBaseName(it.fileName) ?: it.fileName }
             .map { (base, parts) ->
@@ -182,20 +211,48 @@ class HuggingFaceApi(
                     // say so rather than letting it look like a normal model.
                     role = if (expected != null && ordered.size < expected) {
                         GgufRole.SHARD
-                    } else {
+                    } else if (ordered.first().path.endsWith(".gguf", ignoreCase = true)) {
                         GgufRole.STANDALONE
+                    } else {
+                        // llama.cpp opens a split GGUF through its first shard.
+                        // A split safetensors set has no such convention: the
+                        // diffusion engine takes one file, so this cannot be
+                        // used however many parts are downloaded.
+                        GgufRole.SHARD
+                    },
+                    note = if (!ordered.first().path.endsWith(".gguf", ignoreCase = true)) {
+                        "Split across ${ordered.size} safetensors files. The engine " +
+                            "loads a single file, so look for a GGUF or single-file " +
+                            "version of this instead."
+                    } else {
+                        null
                     },
                 )
             }
 
         val singleAssets = singles.map { file ->
+            // The folder carries as much signal as the name: `vae/…` and
+            // `text_encoders/…` are how these repositories are laid out, and
+            // the file names alone are not consistent enough to go on.
+            val component = DiffusionArchDetector.componentOf(file.path)
             HfAsset(
                 repoId = repoId,
-                displayName = file.fileName,
+                displayName = file.path,
                 files = listOf(file),
                 totalBytes = file.sizeBytes,
                 quant = file.quant,
-                role = GgufRoleDetector.roleFromName(file.fileName),
+                role = if (component != null) {
+                    GgufRole.DIFFUSION_COMPONENT
+                } else {
+                    GgufRoleDetector.roleFromName(file.fileName)
+                },
+                component = component,
+                arch = if (component == null) {
+                    DiffusionArchDetector.fromName(file.path)
+                        .takeIf { it != DiffusionArch.UNKNOWN }
+                } else {
+                    null
+                },
             )
         }
 
@@ -205,7 +262,7 @@ class HuggingFaceApi(
             assets = (splitAssets + singleAssets).sortedWith(
                 compareByDescending<HfAsset> { it.role.isLoadable }.thenBy { it.totalBytes },
             ),
-            otherFiles = files.filterNot { it.path.endsWith(".gguf", ignoreCase = true) },
+            otherFiles = files.filterNot { isWeightFile(it.path) },
         )
     }
 

@@ -4,13 +4,18 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.lian.plus.core.LianRuntime
+import com.lian.plus.core.model.DiffusionArchDetector
+import com.lian.plus.core.model.ImageComponent
 import com.lian.plus.core.model.InstalledModel
 import com.lian.plus.core.model.ModelFit
 import com.lian.plus.core.model.ModelFitEvaluator
 import com.lian.plus.core.model.GgufRole
 import com.lian.plus.core.model.ModelKind
+import com.lian.plus.core.model.formatBytes
+import com.lian.plus.core.model.label
 import com.lian.plus.hub.CuratedCatalog
 import com.lian.plus.hub.CuratedModel
+import com.lian.plus.hub.CuratedPipeline
 import com.lian.plus.hub.DownloadCenter
 import com.lian.plus.hub.DownloadService
 import com.lian.plus.hub.HfAsset
@@ -74,6 +79,34 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
         fitFor(asset.totalBytes, kindFor(asset.primary, summary))
 
     /**
+     * What a split pipeline will cost in full, counting the parts that are not
+     * yet installed.
+     *
+     * Judging a Qwen-Image transformer on its own 4 GB is how a phone ends up
+     * with a checkpoint it can never run: the text encoder beside it is twice
+     * that again, and the fit question is about the set.
+     */
+    fun pipelineNote(asset: HfAsset, detail: HfRepoDetail?): String? {
+        val required = asset.requires
+        if (required.isEmpty() || detail == null) return null
+
+        val companions = detail.assets.filter { it.component in required }
+        val cheapest = required.mapNotNull { part ->
+            companions.filter { it.component == part }.minByOrNull { it.totalBytes }
+        }
+        val names = required.joinToString(" and ") { it.label }
+
+        return if (cheapest.size == required.size) {
+            val together = asset.totalBytes + cheapest.sumOf { it.totalBytes }
+            "${asset.arch?.label ?: "This"} pipeline: also needs a $names from this " +
+                "repository — ${formatBytes(together)} in total."
+        } else {
+            "${asset.arch?.label ?: "This"} pipeline: also needs a $names, which this " +
+                "repository does not appear to carry."
+        }
+    }
+
+    /**
      * The curated list, unfiltered.
      *
      * It used to drop anything above the device's tier, which made the app look
@@ -82,6 +115,8 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
      */
     fun curated(): List<CuratedModel> = CuratedCatalog.text +
         CuratedCatalog.image + CuratedCatalog.embedding
+
+    fun curatedPipelines(): List<CuratedPipeline> = CuratedCatalog.pipelines
 
     // ---- browsing --------------------------------------------------------
 
@@ -191,16 +226,76 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
                 _ui.value = _ui.value.copy(message = "Could not reach ${model.repoId}")
                 return@launch
             }
-            val asset = detail.assets
-                .filter { it.role.isLoadable }
-                .firstOrNull { it.displayName.contains(model.preferredFileHint, ignoreCase = true) }
-                ?: bestFileFor(detail)
+            val asset = assetFor(model, detail)
             if (asset == null) {
                 _ui.value = _ui.value.copy(message = "No loadable GGUF model in ${model.repoId}")
                 return@launch
             }
             download(asset, model.kind)
         }
+    }
+
+    /**
+     * Queues every part of a pipeline.
+     *
+     * Each part lives in its own repository, so this is several lookups; they
+     * run in sequence and any one failing names itself rather than leaving a
+     * half-assembled pipeline the user has to diagnose.
+     */
+    fun downloadPipeline(pipeline: CuratedPipeline) {
+        viewModelScope.launch {
+            _ui.value = _ui.value.copy(loadingRepo = true)
+            val missing = mutableListOf<String>()
+            var queued = 0
+
+            for (part in pipeline.parts) {
+                val detail = runCatching { runtime.huggingFace.repoFiles(part.repoId) }.getOrNull()
+                val asset = detail?.let { assetFor(part, it) }
+                if (asset == null) {
+                    missing += part.title
+                    continue
+                }
+                DownloadService.enqueue(
+                    appContext,
+                    asset,
+                    part.kind,
+                    runtime.modelStore.dirFor(part.kind),
+                )
+                queued++
+            }
+
+            _ui.value = _ui.value.copy(
+                loadingRepo = false,
+                message = when {
+                    missing.isEmpty() ->
+                        "Downloading ${pipeline.title} — $queued files. The model appears " +
+                            "once every part has arrived."
+                    queued == 0 ->
+                        "Could not reach any part of ${pipeline.title}."
+                    else ->
+                        "Queued $queued of ${pipeline.parts.size} files. Could not find: " +
+                            missing.joinToString(", ") + "."
+                },
+            )
+        }
+    }
+
+    /**
+     * The file inside [detail] that [model] refers to.
+     *
+     * Companion files are eligible here, unlike in the browser's default sort:
+     * a curated pipeline names its VAE deliberately, and rejecting it for not
+     * being loadable on its own would make the pipeline unassemblable.
+     */
+    private fun assetFor(model: CuratedModel, detail: HfRepoDetail): HfAsset? {
+        val wantsComponent = model.component != null
+        val candidates = detail.assets.filter {
+            if (wantsComponent) it.component == model.component else it.role.isLoadable
+        }
+        return candidates
+            .firstOrNull { it.displayName.contains(model.preferredFileHint, ignoreCase = true) }
+            ?: candidates.minByOrNull { it.totalBytes }
+            ?: if (wantsComponent) null else bestFileFor(detail)
     }
 
     fun pauseDownload(id: String) = DownloadService.pause(appContext, id)
@@ -264,6 +359,15 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
         val tags = summary?.tags.orEmpty().map { it.lowercase() }
         val pipeline = summary?.pipelineTag?.lowercase().orEmpty()
         val name = file.fileName.lowercase()
+
+        // A VAE or a CLIP/T5 encoder is judged by what it is, not by the
+        // repository it came from. The exception is a Qwen language model,
+        // which is a chat model that image pipelines also use as their text
+        // encoder — that one is left to the repository's own tags.
+        DiffusionArchDetector.componentOf(file.path)
+            ?.takeIf { it != ImageComponent.LLM }
+            ?.let { return ModelKind.IMAGE_COMPONENT }
+
         return when {
             pipeline == "text-to-image" || pipeline == "image-to-image" ||
                 tags.any { it.contains("text-to-image") || it.contains("stable-diffusion") } ||

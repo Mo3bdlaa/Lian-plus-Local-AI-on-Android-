@@ -94,14 +94,27 @@ class ImageGenService : Service() {
 
         override fun loadModel(
             modelPath: String,
+            diffusionPath: String,
             vaePath: String,
             taesdPath: String,
+            clipLPath: String,
+            clipGPath: String,
+            t5Path: String,
+            llmPath: String,
             threads: Int,
             flashAttn: Boolean,
             convDirect: Boolean,
         ): Boolean {
             if (!SdNative.isAvailable) return false
-            if (handle != 0L && loadedPath == modelPath) return true
+
+            // Either of the two can be the primary, so the cache key is
+            // whichever one the caller filled in, plus the companions: the same
+            // transformer with a different text encoder is a different model.
+            val key = listOf(
+                modelPath, diffusionPath, vaePath, taesdPath,
+                clipLPath, clipGPath, t5Path, llmPath,
+            ).joinToString("|")
+            if (handle != 0L && loadedPath == key) return true
 
             enterForeground("Loading the model…")
             return worker.submit<Boolean> {
@@ -111,10 +124,11 @@ class ImageGenService : Service() {
                         modelPath = modelPath,
                         vaePath = vaePath,
                         taesdPath = taesdPath,
-                        clipLPath = "",
-                        clipGPath = "",
-                        t5Path = "",
-                        diffusionPath = "",
+                        clipLPath = clipLPath,
+                        clipGPath = clipGPath,
+                        t5Path = t5Path,
+                        llmPath = llmPath,
+                        diffusionPath = diffusionPath,
                         nThreads = threads,
                         wtype = -1,
                         flashAttn = flashAttn,
@@ -125,7 +139,7 @@ class ImageGenService : Service() {
                     Log.e(TAG, "load failed", it); 0L
                 }
                 handle = h
-                loadedPath = if (h != 0L) modelPath else null
+                loadedPath = if (h != 0L) key else null
                 if (h == 0L) leaveForeground() else enterForeground("Model loaded")
                 h != 0L
             }.get()

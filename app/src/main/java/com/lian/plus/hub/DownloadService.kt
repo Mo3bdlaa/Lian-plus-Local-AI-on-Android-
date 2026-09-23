@@ -118,7 +118,12 @@ class DownloadService : LifecycleService() {
                         val first = firstShardOf(event.file)
                         if (runtime.modelStore.splitSetComplete(first)) {
                             runCatching {
-                                runtime.modelStore.register(first, job.kind, job.repoId)
+                                runtime.modelStore.register(
+                                    first,
+                                    job.kind,
+                                    job.repoId,
+                                    relativeName = job.repoPath,
+                                )
                             }.onFailure { Log.w(TAG, "could not register ${first.name}", it) }
                         }
 
@@ -151,7 +156,8 @@ class DownloadService : LifecycleService() {
             ?: return file
         val total = com.lian.plus.core.model.GgufRoleDetector.shardTotal(file.name)
             ?: return file
-        return File(file.parentFile, "%s-%05d-of-%05d.gguf".format(base, 1, total))
+        val ext = com.lian.plus.core.model.GgufRoleDetector.shardExtension(file.name) ?: "gguf"
+        return File(file.parentFile, "%s-%05d-of-%05d.%s".format(base, 1, total, ext))
     }
 
     /** Stops the transfer but keeps the partial file, so resuming is cheap. */
@@ -282,8 +288,9 @@ class DownloadService : LifecycleService() {
                         url = file.downloadUrl,
                         fileName = file.fileName,
                         repoId = file.repoId,
+                        repoPath = file.path,
                         kind = kind,
-                        targetPath = File(targetDir, file.fileName).absolutePath,
+                        targetPath = File(targetDir, localNameFor(file.path)).absolutePath,
                         totalBytes = file.sizeBytes,
                     ),
                 )
@@ -292,6 +299,16 @@ class DownloadService : LifecycleService() {
                 start(context, DownloadCenter.idFor(it.repoId, it.fileName))
             }
         }
+
+        /**
+         * The on-disk name for a repository path.
+         *
+         * Everything lands in one flat directory, and a pipeline repository
+         * holds `vae/model.safetensors` beside `text_encoders/model.safetensors`
+         * often enough that keeping only the last segment would have one
+         * overwrite the other. Files at the repository root are unaffected.
+         */
+        fun localNameFor(repoPath: String): String = repoPath.replace('/', '_')
 
         fun start(context: Context, id: String) {
             val intent = Intent(context, DownloadService::class.java)

@@ -53,7 +53,13 @@ enum class GgufRole(val label: String) {
 
 object GgufRoleDetector {
 
-    private val SHARD = Regex("""-(\d{5})-of-(\d{5})\.gguf$""", RegexOption.IGNORE_CASE)
+    // Safetensors sets are split the same way, and a repository that holds a
+    // text encoder as three parts should be grouped rather than offered a
+    // third at a time.
+    private val SHARD = Regex(
+        """-(\d{5})-of-(\d{5})\.(gguf|safetensors|sft)$""",
+        RegexOption.IGNORE_CASE,
+    )
 
     /**
      * Guesses the role from the file name.
@@ -107,4 +113,8 @@ object GgufRoleDetector {
 
     fun shardTotal(fileName: String): Int? =
         SHARD.find(fileName)?.groupValues?.get(2)?.toIntOrNull()
+
+    /** The extension of a shard, so the rest of the set can be named. */
+    fun shardExtension(fileName: String): String? =
+        SHARD.find(fileName)?.groupValues?.get(3)
 }

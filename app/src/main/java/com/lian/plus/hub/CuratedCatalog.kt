@@ -25,6 +25,24 @@ data class CuratedModel(
     val component: ImageComponent? = null,
 )
 
+/**
+ * Several files that only make sense together.
+ *
+ * A modern image model is not a checkpoint any more; it is a transformer, a
+ * text encoder and a VAE, and missing any one of them means nothing loads.
+ */
+data class CuratedPipeline(
+    val id: String,
+    val title: String,
+    val repoIdOrNull: String? = null,
+    val minTier: DeviceTier,
+    val blurb: String,
+    val strengths: List<String>,
+    val parts: List<CuratedModel>,
+) {
+    val totalBytes: Long get() = parts.sumOf { it.approxSizeBytes }
+}
+
 object CuratedCatalog {
 
     private const val MB = 1024L * 1024
@@ -194,6 +212,65 @@ object CuratedCatalog {
             blurb = "Much better 1024px output, at roughly four gigabytes. Only worth " +
                 "it on a 12 GB device.",
             strengths = listOf("1024px", "Best quality"),
+        ),
+    )
+
+    /**
+     * Pipelines you assemble rather than download.
+     *
+     * Z-Image and Qwen-Image publish the diffusion transformer, the text
+     * encoder and the VAE as three separate files, often in three different
+     * repositories. Left to the browser that is a research exercise; here it
+     * is one tap, and the app queues all three.
+     */
+    val pipelines: List<CuratedPipeline> = listOf(
+        CuratedPipeline(
+            id = "z-image-turbo",
+            title = "Z-Image Turbo",
+            minTier = DeviceTier.FLAGSHIP,
+            blurb = "A 6B model that makes a 1024px image in 8 steps. The closest " +
+                "thing to a modern image model that a phone can actually hold — but " +
+                "it is three files and about 6 GB in total, so it needs a phone with " +
+                "real memory free.",
+            strengths = listOf("8 steps", "1024px", "Modern"),
+            parts = listOf(
+                CuratedModel(
+                    id = "z-image-turbo-dit",
+                    title = "Z-Image Turbo transformer",
+                    repoId = "leejet/Z-Image-Turbo-GGUF",
+                    preferredFileHint = "Q3_K",
+                    kind = ModelKind.IMAGE,
+                    approxSizeBytes = 3140 * MB,
+                    minTier = DeviceTier.FLAGSHIP,
+                    blurb = "The diffusion transformer itself.",
+                    strengths = emptyList(),
+                ),
+                CuratedModel(
+                    id = "z-image-vae",
+                    title = "Z-Image VAE",
+                    repoId = "Tongyi-MAI/Z-Image-Turbo",
+                    preferredFileHint = "vae/",
+                    kind = ModelKind.IMAGE_COMPONENT,
+                    approxSizeBytes = 170 * MB,
+                    minTier = DeviceTier.FLAGSHIP,
+                    blurb = "Turns the model's latents into pixels.",
+                    strengths = emptyList(),
+                    component = ImageComponent.VAE,
+                ),
+                CuratedModel(
+                    id = "qwen3-4b-encoder",
+                    title = "Qwen3 4B Instruct",
+                    repoId = "unsloth/Qwen3-4B-Instruct-2507-GGUF",
+                    preferredFileHint = "Q4_K_M",
+                    kind = ModelKind.TEXT,
+                    approxSizeBytes = 2500 * MB,
+                    minTier = DeviceTier.FLAGSHIP,
+                    blurb = "Reads the prompt. It is an ordinary chat model, so it " +
+                        "doubles as one in the Chat tab at no extra cost.",
+                    strengths = emptyList(),
+                    component = ImageComponent.LLM,
+                ),
+            ),
         ),
     )
 

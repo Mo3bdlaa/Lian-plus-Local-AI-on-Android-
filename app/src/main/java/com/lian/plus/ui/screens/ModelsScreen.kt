@@ -57,10 +57,13 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.lian.plus.core.LianRuntime.ModelLoadState
 import com.lian.plus.core.model.FitLevel
+import com.lian.plus.core.model.ImagePipelineResolver
 import com.lian.plus.core.model.InstalledModel
 import com.lian.plus.core.model.ModelKind
 import com.lian.plus.core.model.formatBytes
+import com.lian.plus.core.model.label
 import com.lian.plus.hub.CuratedModel
+import com.lian.plus.hub.CuratedPipeline
 import com.lian.plus.hub.DownloadStatus
 import com.lian.plus.hub.HfAsset
 import com.lian.plus.hub.HuggingFaceApi
@@ -181,9 +184,11 @@ fun ModelsScreen(vm: ModelsViewModel = viewModel()) {
 
             ModelsTab.PICKS -> PicksList(
                 models = vm.curated(),
+                pipelines = vm.curatedPipelines(),
                 busy = ui.loadingRepo,
                 fitOf = { vm.fitFor(it.approxSizeBytes, it.kind) },
                 onDownload = vm::downloadCurated,
+                onDownloadPipeline = vm::downloadPipeline,
                 modifier = Modifier.weight(1f),
             )
         }
@@ -214,8 +219,8 @@ fun ModelsScreen(vm: ModelsViewModel = viewModel()) {
                     if (detail.assets.isEmpty()) {
                         item {
                             Text(
-                                "This repository has no GGUF files, so none of the engines " +
-                                    "here can read it.",
+                                "This repository has no GGUF or safetensors files, so none " +
+                                    "of the engines here can read it.",
                                 color = Lian.TextMuted,
                             )
                         }
@@ -224,6 +229,7 @@ fun ModelsScreen(vm: ModelsViewModel = viewModel()) {
                         AssetRow(
                             asset = asset,
                             fit = vm.fitFor(asset, detail.summary),
+                            pipelineNote = vm.pipelineNote(asset, detail),
                             recommended = asset == best,
                             onPick = {
                                 vm.download(asset, vm.kindFor(asset.primary, detail.summary))
@@ -453,6 +459,14 @@ private fun InstalledList(
     ) {
         items(installed, key = { it.id }) { model ->
             val active = model.id == activeTextId
+            // Resolving against the list we already have avoids a database
+            // round trip per row; the resolver is a pure function over it.
+            val pipeline = remember(model, installed) {
+                if (model.kind == ModelKind.IMAGE) {
+                    ImagePipelineResolver.resolve(model, installed)
+                } else null
+            }
+            val incomplete = pipeline?.isComplete == false
             BrandCard(Modifier.fillMaxWidth(), highlighted = active) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     GradientIconTile(iconFor(model.kind), size = 42.dp)
@@ -485,7 +499,22 @@ private fun InstalledList(
                         )
                     }
                 }
-                if (model.role.isLoadable) {
+                if (pipeline != null && pipeline.arch.needsAssembly) {
+                    Spacer(Modifier.height(8.dp))
+                    Text(
+                        if (incomplete) {
+                            "${pipeline.arch.label} pipeline · still needs its " +
+                                "${pipeline.missingLabel}. Look for it in the same " +
+                                "repository as the checkpoint."
+                        } else {
+                            "${pipeline.arch.label} pipeline · complete, " +
+                                pipeline.partLabel
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (incomplete) Color(0xFFFFB454) else Lian.Cyan,
+                    )
+                }
+                if (model.role.isLoadable && !incomplete) {
                     Spacer(Modifier.height(12.dp))
                     GradientButton(
                         text = if (active) "Reload" else "Use this model",
@@ -493,6 +522,10 @@ private fun InstalledList(
                         leadingIcon = Icons.Default.PlayArrow,
                         modifier = Modifier.fillMaxWidth(),
                     )
+                } else if (incomplete) {
+                    // Deliberately no button. Offering one here would load two
+                    // thirds of a model and fail inside the engine, which is
+                    // the failure this whole path exists to prevent.
                 } else {
                     // Downloaded, but nothing can load it. Say why here rather
                     // than offering a button that only produces an error.
@@ -532,9 +565,11 @@ private fun InstalledList(
 @Composable
 private fun PicksList(
     models: List<CuratedModel>,
+    pipelines: List<CuratedPipeline>,
     busy: Boolean,
     fitOf: (CuratedModel) -> com.lian.plus.core.model.ModelFit,
     onDownload: (CuratedModel) -> Unit,
+    onDownloadPipeline: (CuratedPipeline) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     LazyColumn(
@@ -550,6 +585,78 @@ private fun PicksList(
                 color = Lian.TextMuted,
             )
         }
+        items(pipelines, key = { it.id }) { pipeline ->
+            // Judged on the whole set. A 3 GB transformer that needs a 2.5 GB
+            // encoder beside it is a 6 GB decision, and showing the first
+            // number alone is how a phone ends up with a model it cannot run.
+            val fit = fitOf(
+                CuratedModel(
+                    id = pipeline.id,
+                    title = pipeline.title,
+                    repoId = pipeline.parts.first().repoId,
+                    preferredFileHint = "",
+                    kind = ModelKind.IMAGE,
+                    approxSizeBytes = pipeline.totalBytes,
+                    minTier = pipeline.minTier,
+                    blurb = pipeline.blurb,
+                    strengths = pipeline.strengths,
+                ),
+            )
+            BrandCard(Modifier.fillMaxWidth()) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    GradientIconTile(iconFor(ModelKind.IMAGE), size = 42.dp)
+                    Spacer(Modifier.width(12.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            pipeline.title,
+                            style = MaterialTheme.typography.titleSmall,
+                            color = Lian.TextPrimary,
+                        )
+                        Text(
+                            "${pipeline.parts.size} files · ${formatBytes(pipeline.totalBytes)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Lian.TextMuted,
+                        )
+                    }
+                    FitBadge(fit)
+                }
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    pipeline.blurb,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Lian.TextMuted,
+                )
+                Spacer(Modifier.height(8.dp))
+                pipeline.parts.forEach { part ->
+                    Row(
+                        Modifier.fillMaxWidth().padding(vertical = 2.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            part.title,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Lian.TextMuted,
+                        )
+                        Text(
+                            formatBytes(part.approxSizeBytes),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = Lian.TextMuted,
+                        )
+                    }
+                }
+                if (fit.isDownloadable) {
+                    Spacer(Modifier.height(10.dp))
+                    GradientButton(
+                        text = "Download all ${pipeline.parts.size}",
+                        onClick = { onDownloadPipeline(pipeline) },
+                        leadingIcon = Icons.Default.Download,
+                        enabled = !busy,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
+            }
+        }
+
         items(models, key = { it.id }) { model ->
             val fit = fitOf(model)
             BrandCard(Modifier.fillMaxWidth()) {
@@ -591,12 +698,15 @@ private fun PicksList(
 private fun AssetRow(
     asset: HfAsset,
     fit: com.lian.plus.core.model.ModelFit,
+    pipelineNote: String?,
     recommended: Boolean,
     onPick: () -> Unit,
 ) {
-    // A companion file is listed so the repository is not misrepresented, but
-    // it is not something to tap: downloading it only ends in a load error.
-    val selectable = asset.role.isLoadable && fit.isDownloadable
+    // A pipeline component - a VAE, a text encoder - is a deliberate download,
+    // not a mistake: the newer families need one and it is a separate file.
+    // What stays untappable is a companion that genuinely cannot be used, like
+    // a vision projector or a lone shard.
+    val selectable = (asset.role.isLoadable || asset.component != null) && fit.isDownloadable
     Column(
         Modifier
             .fillMaxWidth()
@@ -626,10 +736,16 @@ private fun AssetRow(
                 )
             }
             Spacer(Modifier.width(8.dp))
-            if (asset.role.isLoadable) {
-                FitBadge(fit)
-            } else {
-                Text(
+            when {
+                asset.component != null -> Text(
+                    asset.component.label,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Lian.Cyan,
+                )
+
+                asset.role.isLoadable -> FitBadge(fit)
+
+                else -> Text(
                     asset.role.label,
                     style = MaterialTheme.typography.labelSmall,
                     color = Lian.TextMuted,
@@ -637,7 +753,12 @@ private fun AssetRow(
             }
         }
         val note = when {
+            asset.note != null -> asset.note
+            asset.component != null ->
+                "Part of an image pipeline. Download it alongside the checkpoint " +
+                    "it belongs to."
             !asset.role.isLoadable -> asset.role.explanation
+            pipelineNote != null -> pipelineNote
             fit.level != FitLevel.FITS -> fit.detail
             else -> null
         }
