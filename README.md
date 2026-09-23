@@ -89,6 +89,13 @@ large transient allocations cannot take the language model down with them. Image
 are generated inside the conversation, so a prompt can be refined in the thread
 that produced it; tap one to generate again, edit the prompt, save or share.
 
+Modern image models are not a checkpoint any more — Qwen-Image and Z-Image are a
+diffusion transformer, a text encoder and a VAE in three separate files, often in
+three separate repositories. The app reads which family a file belongs to, says
+what else it needs before anything is downloaded, judges the memory question on
+the whole set rather than on the transformer alone, and assembles the pipeline
+for the engine. The curated list will queue all three parts in one tap.
+
 **Serves an OpenAI-compatible API** on `127.0.0.1:8080`, so any tool that speaks
 the OpenAI REST API can use the phone as its backend — with streaming, tools and
 retrieval all working exactly as they do in the app. Optionally exposed to the
@@ -98,10 +105,10 @@ local network, behind an API key.
 
 ## Install
 
-Direct download — **v0.5.0**, arm64-v8a, 96 MB:
+Direct download — **v0.6.0**, arm64-v8a, 96 MB:
 
 ```
-https://github.com/Mo3bdlaa/Lian-plus-Local-AI-on-Android-/raw/apk/lian-plus-v0.5.0-arm64-v8a.apk
+https://github.com/Mo3bdlaa/Lian-plus-Local-AI-on-Android-/raw/apk/lian-plus-v0.6.0-arm64-v8a.apk
 ```
 
 Open that on the phone and tap the downloaded file. The
@@ -148,6 +155,12 @@ Recommended** → download one → **Chat**.
 **للصور:** حمّل نموذج صور من نفس الشاشة (SD Turbo هو الأسرع على الموبايل — صورة في
 ٤ خطوات). تقدر تولّد الصور جوه الشات نفسه — بدّل زرار الكتابة لوضع الصورة واكتب
 الوصف، وتقدر تعدّل الوصف وتعيد التوليد في نفس المحادثة.
+
+**نماذج الصور الحديثة مش ملف واحد:** زي Qwen-Image و Z-Image، الموديل بيبقى تلات
+ملفات — الـ transformer و الـ text encoder و الـ VAE، وساعات في تلات ريبو مختلفة.
+التطبيق بيقرا الملف ويعرف هو من أنهي عيلة، ويقولك محتاج إيه كمان **قبل** ما تحمّل،
+ويحسب الذاكرة على المجموعة كلها مش على ملف واحد. ومن تبويب **Picks** تقدر تحمّل
+التلات ملفات بضغطة واحدة.
 
 **الـ GPU:** التطبيق بيستخدم كارت الشاشة بتاع الموبايل عن طريق Vulkan. من تبويب
 **Settings** تقدر تشوف الأجهزة اللي السواقة عرضتها وتختار GPU أو CPU وكام طبقة

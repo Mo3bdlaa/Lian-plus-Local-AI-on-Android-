@@ -235,6 +235,55 @@ The tokens/second estimate treats generation as memory-bandwidth bound: one
 pass over the weights per token, with a conservative sustained-bandwidth figure
 per CPU capability class.
 
+## Image pipelines
+
+SD 1.x and SDXL ship the UNet, the text encoder and the VAE in one checkpoint.
+Everything since Flux splits them: the GGUF published on the Hub is the
+diffusion transformer alone, and the encoder and VAE are separate files, often
+in separate repositories and several gigabytes each. Handing the engine that one
+file produces a load failure with nothing in it to explain the cause.
+
+`DiffusionArch` names the family and what it requires. Detection reads the file
+rather than its name, in two steps, because neither is enough on its own:
+
+* `general.architecture`, where a converter wrote one. The Qwen-Image 2.1 GGUF
+  carries exactly three metadata keys, of which that is the only useful one.
+* The tensor names otherwise. The Z-Image GGUFs published by the
+  stable-diffusion.cpp author carry **no key/value pairs at all**, so the names
+  are the only signal left — and they are what the engine itself matches on.
+  `cap_embedder.`/`context_refiner.` is Z-Image, `double_blocks.` with
+  `single_blocks.` is Flux, and `first_stage_model.` means the file is complete
+  whatever else is in it.
+
+The name is consulted last, as a guess for labelling a repository before
+anything has been downloaded.
+
+`ImagePipelineResolver` then matches the required components against what is
+installed, preferring a companion from the same repository — a user with two
+VAEs almost certainly wants the one that shipped beside this checkpoint, and the
+other produces images that are subtly wrong rather than an error.
+
+Two consequences are worth stating:
+
+* **Which engine parameter the primary file takes follows from the family.** A
+  complete checkpoint goes to `model_path`; a bare transformer goes to
+  `diffusion_model_path`. Passing one as the other is the original failure, so
+  it is decided from the detection rather than guessed at load time.
+* **Memory is judged on the set.** A Qwen-Image transformer is 4 GB and its text
+  encoder is twice that again. `ModelResidency` budgets the pipeline total,
+  because weighing the transformer alone is how a device ends up holding a
+  checkpoint it can never run.
+
+A Qwen language model deserves a note: Qwen-Image and Z-Image condition on one,
+and the Z-Image reference invocation loads a stock `Qwen3-4B-Instruct` GGUF as
+its text encoder. So being usable as an encoder is recorded as an extra role
+rather than a reclassification — the file stays a chat model, and the user does
+not download the same weights twice. The inverse trap is sharper:
+`qwen-image-2.1-UC-Q4_0.gguf` also contains "qwen", and reading that as the
+encoder puts the checkpoint in the encoder slot and leaves the pipeline with no
+transformer at all. A file that names its own diffusion family is never a
+companion.
+
 ## Measuring the device
 
 `DeviceBenchmark` runs once, in the background, a couple of seconds after
