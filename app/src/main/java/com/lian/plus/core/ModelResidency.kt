@@ -137,19 +137,13 @@ class ModelResidency(
                 .onSuccess { residentEmbedding = model }
                 .map { }
 
-            ModelKind.IMAGE -> {
-                val threads = runtime.capability.value?.recommendedThreads ?: 4
-                val load = if (pipeline != null) {
-                    runtime.imageClient.load(pipeline, threads = threads)
-                } else {
-                    runtime.imageClient.load(model, threads = threads)
-                }
-                load.onSuccess {
+            ModelKind.IMAGE -> runtime.loadImageModel(model)
+                .onSuccess {
                     residentImage = model
                     residentImageExtraBytes = (pipeline?.totalBytes ?: model.sizeBytes) -
                         model.sizeBytes
-                }.map { }
-            }
+                }
+                .map { }
 
             ModelKind.IMAGE_COMPONENT ->
                 Result.failure(IllegalStateException("${model.displayName} is a companion file."))

@@ -59,6 +59,12 @@ data class AppSettings(
     val imageCfg: Float = 1.5f,
     val imageSize: Int = 512,
     val imageSampler: Int = 1,
+    /**
+     * The image model whose own settings are currently in the four fields
+     * above. Loading a different model replaces them with what that one wants;
+     * reloading the same one leaves whatever the user has since tuned.
+     */
+    val imageProfileModelId: String = "",
 
     val huggingFaceToken: String = "",
     val keepScreenOnWhileGenerating: Boolean = true,
@@ -124,6 +130,7 @@ class SettingsStore(private val context: Context) {
             prefs[Keys.imageCfg] = next.imageCfg
             prefs[Keys.imageSize] = next.imageSize
             prefs[Keys.imageSampler] = next.imageSampler
+            prefs[Keys.imageProfileModelId] = next.imageProfileModelId
             prefs[Keys.hfToken] = next.huggingFaceToken
             prefs[Keys.keepScreenOn] = next.keepScreenOnWhileGenerating
             prefs[Keys.onboardingDone] = next.onboardingDone
@@ -168,6 +175,7 @@ class SettingsStore(private val context: Context) {
         imageCfg = this[Keys.imageCfg] ?: 1.5f,
         imageSize = this[Keys.imageSize] ?: 512,
         imageSampler = this[Keys.imageSampler] ?: 1,
+        imageProfileModelId = this[Keys.imageProfileModelId] ?: "",
         huggingFaceToken = this[Keys.hfToken] ?: "",
         keepScreenOnWhileGenerating = this[Keys.keepScreenOn] ?: true,
         onboardingDone = this[Keys.onboardingDone] ?: false,
@@ -204,6 +212,7 @@ class SettingsStore(private val context: Context) {
         val imageCfg = floatPreferencesKey("image_cfg")
         val imageSize = intPreferencesKey("image_size")
         val imageSampler = intPreferencesKey("image_sampler")
+        val imageProfileModelId = stringPreferencesKey("image_profile_model_id")
         val hfToken = stringPreferencesKey("hf_token")
         val keepScreenOn = booleanPreferencesKey("keep_screen_on")
         val onboardingDone = booleanPreferencesKey("onboarding_done")

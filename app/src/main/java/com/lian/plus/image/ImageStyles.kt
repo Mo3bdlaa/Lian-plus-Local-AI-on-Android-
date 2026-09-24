@@ -63,30 +63,3 @@ enum class AspectRatio(val label: String, val wRatio: Int, val hRatio: Int) {
 
     private fun snap(value: Int): Int = ((value + 32) / 64 * 64).coerceAtLeast(256)
 }
-
-
-/**
- * The resolution a checkpoint was actually trained at.
- *
- * Diffusion models degrade badly above their training resolution and the cost
- * grows with the square of the side, so a 768px request against a 512-native
- * checkpoint is slower *and* worse. SD-Turbo is 512 despite being built on
- * SD 2.1, which is why the family name alone is not enough.
- */
-object NativeResolution {
-
-    fun forVersion(version: String?): Int {
-        val v = version?.lowercase().orEmpty()
-        return when {
-            v.contains("sdxl") || v.contains("xl") -> 1024
-            v.contains("sd3") || v.contains("flux") -> 1024
-            v.contains("sd 2") || v.contains("sd2") -> 512
-            v.contains("sd 1") || v.contains("sd1") -> 512
-            else -> 512
-        }
-    }
-
-    /** The largest side worth offering: the lower of the model's and the device's. */
-    fun cap(version: String?, deviceMax: Int): Int =
-        minOf(forVersion(version), deviceMax)
-}

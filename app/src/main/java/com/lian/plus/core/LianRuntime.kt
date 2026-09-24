@@ -19,6 +19,7 @@ import com.lian.plus.data.db.AppDatabase
 import com.lian.plus.hub.HuggingFaceApi
 import com.lian.plus.hub.ModelDownloader
 import com.lian.plus.image.ImageGenClient
+import com.lian.plus.image.ImageModelProfiles
 import com.lian.plus.image.ImageRequest
 import com.lian.plus.image.Sampler
 import com.lian.plus.llm.ContextManager
@@ -298,6 +299,52 @@ class LianRuntime private constructor(private val appContext: Context) {
                 if (!embedder.isLoaded) loadEmbeddingModel(model)
             }
         }
+    }
+
+    /**
+     * Loads an image model and adopts the settings that model actually wants.
+     *
+     * Both entry points go through here so the adoption is not something one
+     * screen does and the other forgets.
+     */
+    suspend fun loadImageModel(model: InstalledModel): Result<String> {
+        val threads = capability.value?.recommendedThreads ?: 4
+        val pipeline = runCatching { modelStore.pipelineFor(model) }.getOrNull()
+        val result = if (pipeline != null) {
+            imageClient.load(pipeline, threads = threads)
+        } else {
+            imageClient.load(model, threads = threads)
+        }
+        result.onSuccess { version -> adoptImageProfile(model, version) }
+        return result
+    }
+
+    /**
+     * Applies a checkpoint's own step count, guidance scale and resolution.
+     *
+     * These belong to the model, not to the user's taste: a turbo model at the
+     * twenty steps and scale 7 that SD 1.5 wants comes out scorched and takes
+     * five times as long. They are written into settings rather than applied
+     * invisibly, so the values on screen are the ones in use and can still be
+     * changed - and they are only rewritten when the model changes, so a
+     * reload does not discard what the user tuned.
+     */
+    private suspend fun adoptImageProfile(model: InstalledModel, version: String) {
+        val settings = settingsStore.settings.first()
+        if (settings.imageProfileModelId == model.id) return
+
+        val profile = ImageModelProfiles.forModel(version, model.fileName)
+        val deviceMax = _capability.value?.recommendedImageSize ?: profile.nativeSize
+        settingsStore.update {
+            it.copy(
+                imageSteps = profile.steps,
+                imageCfg = profile.cfgScale,
+                imageSize = minOf(profile.nativeSize, deviceMax),
+                imageSampler = profile.sampler.nativeValue,
+                imageProfileModelId = model.id,
+            )
+        }
+        Log.i(TAG, "adopted ${model.displayName} settings: ${profile.note}")
     }
 
     fun defaultImageRequest(): ImageRequest {

@@ -121,8 +121,7 @@ class ImageViewModel(app: Application) : AndroidViewModel(app) {
     fun loadModel(model: InstalledModel) {
         viewModelScope.launch {
             _loadingModelId.value = model.id
-            val threads = capability.value?.recommendedThreads ?: 4
-            runtime.imageClient.load(model, threads = threads).fold(
+            runtime.loadImageModel(model).fold(
                 onSuccess = {
                     runtime.settingsStore.update { s -> s.copy(activeImageModelId = model.id) }
                     _ui.value = _ui.value.copy(message = "${model.displayName} loaded.")
