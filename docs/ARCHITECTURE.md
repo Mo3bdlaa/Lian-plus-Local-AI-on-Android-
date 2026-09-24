@@ -284,6 +284,34 @@ encoder puts the checkpoint in the encoder slot and leaves the pipeline with no
 transformer at all. A file that names its own diffusion family is never a
 companion.
 
+### Settings that belong to the model
+
+Step count, guidance scale and output resolution are properties of a
+checkpoint, not preferences. A distilled turbo model is trained to converge in a
+handful of steps with no classifier-free guidance at all; running it at the
+twenty steps and scale 7 that SD 1.5 wants takes five times as long and comes
+out scorched, and CFG above 1.0 on such a model doubles the work per step to get
+there. Flux is guided through a separate distilled-guidance input the engine
+already defaults, so CFG on top of it is pure waste.
+
+`ImageModelProfiles` holds one profile per family, every figure taken from the
+reference invocation in stable-diffusion.cpp's own docs. Two directions of
+ambiguity are worth naming, because the family string alone gets both wrong:
+
+* "Z-Image" covers the base model and the Turbo distill, which differ by 8 steps
+  at scale 1 versus 20 at scale 5. The file name settles it.
+* SD-Turbo reports as "SD 2.x" and is a 512px four-step model, so following the
+  family would ask it for twenty steps it does not need.
+
+The resolution default used to be 512 for anything unrecognised, which is every
+family added since SDXL — all of them 1024px models. It is now 1024, with 512
+reserved for the families that really are 512.
+
+`LianRuntime.loadImageModel` writes the profile into settings rather than
+applying it invisibly, so the values on screen are the ones in use and remain
+editable, and only when the loaded model changes, so a reload does not discard
+tuning. Both entry points go through it.
+
 ## Measuring the device
 
 `DeviceBenchmark` runs once, in the background, a couple of seconds after

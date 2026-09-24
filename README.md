@@ -105,10 +105,10 @@ local network, behind an API key.
 
 ## Install
 
-Direct download — **v0.6.0**, arm64-v8a, 96 MB:
+Direct download — **v0.6.1**, arm64-v8a, 96 MB:
 
 ```
-https://github.com/Mo3bdlaa/Lian-plus-Local-AI-on-Android-/raw/apk/lian-plus-v0.6.0-arm64-v8a.apk
+https://github.com/Mo3bdlaa/Lian-plus-Local-AI-on-Android-/raw/apk/lian-plus-v0.6.1-arm64-v8a.apk
 ```
 
 Open that on the phone and tap the downloaded file. The
