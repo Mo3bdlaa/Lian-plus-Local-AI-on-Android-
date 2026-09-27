@@ -109,6 +109,26 @@ class ImageViewModel(app: Application) : AndroidViewModel(app) {
     val clientState = runtime.imageClient.state
     val capability = runtime.capability
 
+    /**
+     * The step count, guidance and sampler in use. The screen shows and edits
+     * these rather than keeping its own copy: a loaded model writes its own
+     * values here, and a screen with private defaults silently overrode them.
+     */
+    val settings = runtime.settingsStore.settings
+        .stateIn(viewModelScope, SharingStarted.Eagerly, runtime.currentSettings)
+
+    fun saveSampling(steps: Int? = null, cfg: Float? = null, sampler: Sampler? = null) {
+        viewModelScope.launch {
+            runtime.settingsStore.update {
+                it.copy(
+                    imageSteps = steps ?: it.imageSteps,
+                    imageCfg = cfg ?: it.imageCfg,
+                    imageSampler = sampler?.nativeValue ?: it.imageSampler,
+                )
+            }
+        }
+    }
+
     /** Image models on the device, for the in-place picker. */
     val installedModels: StateFlow<List<InstalledModel>> =
         runtime.modelStore.observe(ModelKind.IMAGE)
@@ -288,9 +308,14 @@ fun ImageScreen(onBrowseModels: () -> Unit, vm: ImageViewModel = viewModel()) {
     var negative by remember { mutableStateOf("blurry, low quality, watermark") }
     var style by remember { mutableStateOf(ImageStyle.NONE) }
     var ratio by remember { mutableStateOf(AspectRatio.SQUARE) }
-    var steps by remember { mutableStateOf(4f) }
-    var cfg by remember { mutableStateOf(1.5f) }
-    var sampler by remember { mutableStateOf(Sampler.EULER_A) }
+    // Keyed on the stored values, so loading a model that brings its own
+    // settings updates what is on screen. The slider keeps a local copy only
+    // while it is being dragged, and writes back when it is let go.
+    val settings by vm.settings.collectAsState()
+    var steps by remember(settings.imageSteps) { mutableStateOf(settings.imageSteps.toFloat()) }
+    var cfg by remember(settings.imageCfg) { mutableStateOf(settings.imageCfg) }
+    val sampler = Sampler.entries.firstOrNull { it.nativeValue == settings.imageSampler }
+        ?: Sampler.EULER_A
     var advanced by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
 
@@ -468,10 +493,17 @@ fun ImageScreen(onBrowseModels: () -> Unit, vm: ImageViewModel = viewModel()) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = Lian.TextPrimary,
                 )
-                Slider(value = steps, onValueChange = { steps = it }, valueRange = 1f..30f, steps = 28)
+                Slider(
+                    value = steps,
+                    onValueChange = { steps = it },
+                    onValueChangeFinished = { vm.saveSampling(steps = steps.toInt()) },
+                    valueRange = 1f..50f,
+                    steps = 48,
+                )
                 Text(
-                    "Turbo checkpoints need 1-4. A standard SD 1.5 model needs 20-30, " +
-                        "which is a few minutes on a phone.",
+                    "Set by the model when it loads — Z-Image Turbo wants 8, SD-Turbo " +
+                        "1-4, a full model 20 or more. Changing it here sticks until a " +
+                        "different model is loaded.",
                     style = MaterialTheme.typography.labelSmall,
                     color = Lian.TextMuted,
                 )
@@ -482,9 +514,15 @@ fun ImageScreen(onBrowseModels: () -> Unit, vm: ImageViewModel = viewModel()) {
                     style = MaterialTheme.typography.bodyMedium,
                     color = Lian.TextPrimary,
                 )
-                Slider(value = cfg, onValueChange = { cfg = it }, valueRange = 1f..12f)
+                Slider(
+                    value = cfg,
+                    onValueChange = { cfg = it },
+                    onValueChangeFinished = { vm.saveSampling(cfg = cfg) },
+                    valueRange = 1f..12f,
+                )
                 Text(
-                    "Turbo models want roughly 1.0; the usual 7.5 washes them out.",
+                    "Distilled models are trained for 1.0, and anything higher doubles " +
+                        "the work per step as well as washing them out.",
                     style = MaterialTheme.typography.labelSmall,
                     color = Lian.TextMuted,
                 )
@@ -497,7 +535,7 @@ fun ImageScreen(onBrowseModels: () -> Unit, vm: ImageViewModel = viewModel()) {
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     listOf(Sampler.EULER_A, Sampler.EULER, Sampler.DPMPP2M, Sampler.LCM).forEach {
-                        BrandChip(it.label, sampler == it, { sampler = it })
+                        BrandChip(it.label, sampler == it, { vm.saveSampling(sampler = it) })
                     }
                 }
 

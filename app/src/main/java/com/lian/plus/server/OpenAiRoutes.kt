@@ -6,6 +6,7 @@ import com.lian.plus.core.TurnEvent
 import com.lian.plus.core.TurnOptions
 import com.lian.plus.core.model.ModelKind
 import com.lian.plus.image.ImageEvent
+import com.lian.plus.image.NativeResolution
 import com.lian.plus.llm.ChatMessage
 import com.lian.plus.llm.ChatTurn
 import com.lian.plus.llm.FinishReason
@@ -267,9 +268,20 @@ class OpenAiRoutes(private val runtime: LianRuntime) {
             )
         }
 
-        val size = body["size"]?.jsonPrimitive?.content
-            ?.substringBefore('x')?.toIntOrNull()
-            ?: runtime.currentSettings.imageSize
+        // Bounded by the model and the device. Unbounded, one request for
+        // 4096x4096 was enough to have the image process killed for memory -
+        // from anywhere on the LAN, when the server is exposed there.
+        val ceiling = NativeResolution.cap(
+            runtime.imageClient.state.value.modelVersion,
+            runtime.capability.value?.recommendedImageSize ?: 512,
+        )
+        val size = (
+            body["size"]?.jsonPrimitive?.content
+                ?.substringBefore('x')?.toIntOrNull()
+                ?: runtime.currentSettings.imageSize
+            )
+            .coerceIn(256, ceiling)
+            .let { it / 64 * 64 }
 
         val base = runtime.defaultImageRequest()
         val target = File(runtime.imagesDir, "api_${System.currentTimeMillis()}.png")

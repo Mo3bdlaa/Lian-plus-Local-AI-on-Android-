@@ -197,7 +197,9 @@ class HuggingFaceApi(
         // everything else is an asset of one.
         val (shards, singles) = weights.partition { it.isSplitShard }
         val splitAssets = shards
-            .groupBy { GgufRoleDetector.splitBaseName(it.fileName) ?: it.fileName }
+            // By path, not name: `text_encoder/model-00001-of-00003` and
+            // `transformer/model-00001-of-00003` are two different models.
+            .groupBy { GgufRoleDetector.splitBaseName(it.path) ?: it.path }
             .map { (base, parts) ->
                 val ordered = parts.sortedBy { it.fileName }
                 val expected = GgufRoleDetector.shardTotal(ordered.first().fileName)

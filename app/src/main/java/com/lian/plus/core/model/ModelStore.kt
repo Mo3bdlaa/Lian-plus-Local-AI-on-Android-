@@ -151,6 +151,19 @@ class ModelStore(private val context: Context) {
                 dao.delete(row.id)
             }
         }
+        // Rows written before pipelines existed carry no family. Re-reading
+        // the header fixes them in place; without it an image model downloaded
+        // on an older version is judged by its name for ever. Registration
+        // always assigns a family - UNKNOWN at worst - so each row is read at
+        // most once. (Older versions never let a companion be downloaded, so
+        // there are no old component rows to repair.)
+        for (row in dao.all()) {
+            if (row.kind != ModelKind.IMAGE.name || row.diffusionArch != null) continue
+            val f = File(row.filePath)
+            runCatching { register(f, ModelKind.IMAGE, row.repoId, displayName = row.displayName) }
+                .onFailure { Log.w(TAG, "could not re-read ${row.displayName}: ${it.message}") }
+        }
+
         val known = dao.all().map { it.filePath }.toSet()
         for (kind in ModelKind.entries) {
             val dir = dirFor(kind)

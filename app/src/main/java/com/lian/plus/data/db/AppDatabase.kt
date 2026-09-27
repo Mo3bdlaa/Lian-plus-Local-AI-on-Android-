@@ -54,8 +54,8 @@ abstract class AppDatabase : RoomDatabase() {
         /**
          * Records which diffusion family an image model belongs to.
          *
-         * Existing rows get null and are re-detected the next time the store
-         * syncs, which costs one header read per file.
+         * Existing rows get null here and ModelStore.sync re-reads their
+         * headers on the next start - one header read per image model, once.
          */
         private val MIGRATION_3_4 = object : Migration(3, 4) {
             override fun migrate(db: SupportSQLiteDatabase) {

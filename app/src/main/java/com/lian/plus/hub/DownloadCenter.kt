@@ -84,6 +84,12 @@ object DownloadCenter {
     }
 
     /** Stable id for a file, so pause/resume and de-duplication line up. */
-    fun idFor(repoId: String?, fileName: String): String =
-        "${repoId.orEmpty()}/$fileName".replace('/', '_')
+    /**
+     * Keyed on the path inside the repository, not the file name. Diffusers
+     * layouts put `diffusion_pytorch_model.safetensors` in both `vae/` and
+     * `transformer/`; keyed on the name, the second download was taken for
+     * the first and never ran.
+     */
+    fun idFor(repoId: String?, repoPath: String): String =
+        "${repoId.orEmpty()}/$repoPath".replace('/', '_')
 }

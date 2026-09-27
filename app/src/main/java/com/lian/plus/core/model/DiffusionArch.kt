@@ -42,6 +42,40 @@ enum class DiffusionArch(
     val needsAssembly: Boolean get() = required.isNotEmpty()
 
     /**
+     * Whether [encoder] can condition this family, judged from its own header.
+     *
+     * Every Qwen chat model is a *language* model, but a diffusion transformer
+     * is trained against one specific encoder and reads its hidden states at a
+     * fixed width. Z-Image's `cap_embedder` takes 2560-wide features — Qwen3
+     * 4B — and handing it Qwen2.5 1.5B (1536 wide) fails at load or, worse,
+     * loads and draws noise. Qwen-Image conditions on a vision-language model.
+     *
+     * Null means the header could not say (a safetensors file has none), and
+     * the caller must fall back to where the file came from.
+     */
+    fun acceptsEncoder(architecture: String?, embeddingDim: Int?): Boolean? {
+        val arch = architecture?.lowercase() ?: return null
+        return when (this) {
+            Z_IMAGE -> arch == "qwen3" && (embeddingDim == null || embeddingDim == Z_IMAGE_TEXT_WIDTH)
+            QWEN_IMAGE -> arch.startsWith("qwen") && arch.contains("vl")
+            else -> true
+        }
+    }
+
+    /** Which text encoder to look for, when the family is particular about it. */
+    val encoderHint: String?
+        get() = when (this) {
+            Z_IMAGE -> "Qwen3 4B"
+            QWEN_IMAGE -> "a Qwen vision-language model (Qwen2.5-VL or Qwen3-VL)"
+            else -> null
+        }
+
+    companion object {
+        /** Width of Z-Image's text input, from `cap_embedder.1.weight` (2560 x 3840). */
+        const val Z_IMAGE_TEXT_WIDTH = 2560
+    }
+
+    /**
      * Whether the file goes to the engine as a complete checkpoint or as the
      * diffusion transformer of a pipeline. Passing a bare transformer as a
      * checkpoint is the specific mistake that produces an unexplained load

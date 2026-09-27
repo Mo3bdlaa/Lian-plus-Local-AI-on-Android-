@@ -26,9 +26,17 @@ data class ImagePipeline(
     val totalBytes: Long
         get() = primary.sizeBytes + parts.values.sumOf { it.sizeBytes }
 
-    /** What still has to be downloaded, for the UI to name. */
+    /**
+     * What still has to be downloaded, for the UI to name. The encoder is
+     * named precisely when the family needs a particular one - "a text
+     * encoder" is no help to someone with three Qwen models already installed,
+     * none of which fit.
+     */
     val missingLabel: String
-        get() = missing.joinToString(" and ") { it.label }
+        get() = missing.joinToString(" and ") { part ->
+            val hint = arch.encoderHint
+            if (part == ImageComponent.LLM && hint != null) "text encoder ($hint)" else part.label
+        }
 
     val partLabel: String
         get() = if (parts.isEmpty()) {
@@ -45,9 +53,17 @@ object ImagePipelineResolver {
     /**
      * Builds the pipeline for [primary] out of what is installed.
      *
-     * Components from the same repository win: a user who has two VAEs almost
-     * certainly wants the one that shipped beside this checkpoint, and picking
-     * the other produces images that are subtly wrong rather than an error.
+     * The ranking, strongest first: shipped in the same repository; shipped in
+     * a repository named for the same family (the Z-Image transformer and its
+     * VAE live in different repositories, but both say "Z-Image"); anything
+     * else of the right kind. A user with two VAEs almost certainly wants the
+     * one that came with this checkpoint — the other produces images that are
+     * subtly wrong rather than an error, which is the harder failure to spot.
+     *
+     * A text encoder is held to more than a ranking. Every Qwen chat model on
+     * the phone is a candidate by name, and most of them are the wrong width
+     * for any given transformer; one that its own header rules out is never
+     * chosen, however it ranks.
      */
     fun resolve(primary: InstalledModel, installed: List<InstalledModel>): ImagePipeline {
         val arch = primary.diffusionArch
@@ -56,9 +72,22 @@ object ImagePipelineResolver {
         val wanted = arch.required + arch.optional
         val candidates = installed.filter { it.id != primary.id && it.component != null }
 
+        fun sameRepo(m: InstalledModel) = m.repoId != null && m.repoId == primary.repoId
+        fun sameFamily(m: InstalledModel) =
+            m.repoId != null && DiffusionArchDetector.fromName(m.repoId) == arch
+
         val parts = wanted.mapNotNull { component ->
-            val matches = candidates.filter { it.component == component }
-            val chosen = matches.firstOrNull { it.repoId != null && it.repoId == primary.repoId }
+            val matches = candidates
+                .filter { it.component == component }
+                .filter { candidate ->
+                    if (component != ImageComponent.LLM) return@filter true
+                    // The header decides when there is one. Without one, only
+                    // where the file came from is evidence enough.
+                    arch.acceptsEncoder(candidate.architecture, candidate.embeddingDim)
+                        ?: (sameRepo(candidate) || sameFamily(candidate))
+                }
+            val chosen = matches.firstOrNull(::sameRepo)
+                ?: matches.firstOrNull(::sameFamily)
                 ?: matches.firstOrNull()
             chosen?.let { component to it }
         }.toMap()

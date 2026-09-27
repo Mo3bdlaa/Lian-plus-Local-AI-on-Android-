@@ -177,6 +177,10 @@ class LianRuntime private constructor(private val appContext: Context) {
      */
     suspend fun recordGenerationSpeed(tokensPerSecond: Double, generatedTokens: Int) {
         if (tokensPerSecond <= 0 || generatedTokens < MIN_TOKENS_FOR_FEEDBACK) return
+        // With layers on the GPU the rate is no longer the CPU reading weights
+        // from memory, and folding it in would teach the estimate for every
+        // CPU-only model a number it cannot reach.
+        if (currentSettings.gpuLayers != 0 && ComputeDevices.gpu() != null) return
         val modelBytes = residency.loadedText()?.sizeBytes ?: return
         if (modelBytes <= 0) return
 

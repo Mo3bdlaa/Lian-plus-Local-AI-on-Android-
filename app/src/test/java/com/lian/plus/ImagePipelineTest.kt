@@ -46,6 +46,8 @@ class ImagePipelineTest {
         repo: String? = "repo/one",
         component: ImageComponent? = null,
         arch: DiffusionArch? = null,
+        llmArch: String? = null,
+        width: Int? = null,
     ) = InstalledModel(
         id = id,
         displayName = id,
@@ -55,10 +57,10 @@ class ImagePipelineTest {
         repoId = repo,
         fileName = name,
         quant = Quant.UNKNOWN,
-        architecture = null,
+        architecture = llmArch,
         parameterCount = null,
         contextTrained = null,
-        embeddingDim = null,
+        embeddingDim = width,
         chatTemplate = null,
         component = component,
         diffusionArch = arch,
@@ -180,6 +182,90 @@ class ImagePipelineTest {
             listOf(primary, strangerVae, ownVae, llm),
         )
         assertEquals("/models/own_vae.safetensors", pipeline.pathOf(ImageComponent.VAE))
+    }
+
+    // ---- encoder compatibility ------------------------------------------
+
+    private val zImage = model("zi", "z_image_turbo-Q3_K.gguf", ModelKind.IMAGE, 3 * GIB,
+        repo = "leejet/Z-Image-Turbo-GGUF", arch = DiffusionArch.Z_IMAGE)
+    private val zVae = model("zvae", "vae_diffusion_pytorch_model.safetensors",
+        ModelKind.IMAGE_COMPONENT, GIB / 6, repo = "Tongyi-MAI/Z-Image-Turbo",
+        component = ImageComponent.VAE)
+
+    // What a phone with the curated chat picks installed actually holds.
+    private val qwen25small = model("q15", "qwen2.5-1.5b-instruct-q4_k_m.gguf", ModelKind.TEXT,
+        GIB, repo = "Qwen/Qwen2.5-1.5B-Instruct-GGUF", component = ImageComponent.LLM,
+        llmArch = "qwen2", width = 1536)
+    private val qwen3_4b = model("q3", "Qwen3-4B-Instruct-2507-Q4_K_M.gguf", ModelKind.TEXT,
+        5 * GIB / 2, repo = "unsloth/Qwen3-4B-Instruct-2507-GGUF",
+        component = ImageComponent.LLM, llmArch = "qwen3", width = 2560)
+
+    @Test
+    fun `Z-Image never takes a Qwen chat model of the wrong width`() {
+        // The 1.5B model sorts first and shares no repository with either
+        // side, so a resolver that only ranked would pick it - and Z-Image's
+        // cap_embedder reads 2560-wide features, not 1536.
+        val pipeline = ImagePipelineResolver.resolve(
+            zImage,
+            listOf(zImage, qwen25small, zVae, qwen3_4b),
+        )
+        assertTrue(pipeline.isComplete)
+        assertEquals(qwen3_4b.filePath, pipeline.pathOf(ImageComponent.LLM))
+    }
+
+    @Test
+    fun `with only incompatible encoders installed the pipeline says what it needs`() {
+        val pipeline = ImagePipelineResolver.resolve(zImage, listOf(zImage, qwen25small, zVae))
+        assertFalse(pipeline.isComplete)
+        assertEquals(listOf(ImageComponent.LLM), pipeline.missing)
+        // Named precisely, because "a text encoder" is no help to someone who
+        // already has one that does not fit.
+        assertTrue(pipeline.missingLabel, pipeline.missingLabel.contains("Qwen3 4B"))
+    }
+
+    @Test
+    fun `a VAE from a repository named for the family is found across repositories`() {
+        // The curated Z-Image transformer and its VAE come from different
+        // repositories; the family in the repository name is what ties them.
+        val sdxlVae = model("xl", "sdxl_vae.safetensors", ModelKind.IMAGE_COMPONENT,
+            GIB / 3, repo = "madebyollin/sdxl-vae-fp16-fix", component = ImageComponent.VAE)
+        val pipeline = ImagePipelineResolver.resolve(
+            zImage,
+            listOf(zImage, sdxlVae, zVae, qwen3_4b),
+        )
+        assertEquals(zVae.filePath, pipeline.pathOf(ImageComponent.VAE))
+    }
+
+    @Test
+    fun `a headerless encoder is accepted only from where it belongs`() {
+        val qwenImage = model("qi", "qwen_image_2.1-Q4_K.gguf", ModelKind.IMAGE, 4 * GIB,
+            repo = "abenzerps/Qwen-Image-2.1-Uncensored-GGUF", arch = DiffusionArch.QWEN_IMAGE)
+        val sameRepoEncoder = model("te", "text_encoders_qwen3vl_8b.safetensors",
+            ModelKind.IMAGE_COMPONENT, 9 * GIB, repo = "abenzerps/Qwen-Image-2.1-Uncensored-GGUF",
+            component = ImageComponent.LLM)
+        val strayEncoder = model("stray", "qwen_text_encoder.safetensors",
+            ModelKind.IMAGE_COMPONENT, 9 * GIB, repo = "someone/unrelated",
+            component = ImageComponent.LLM)
+
+        assertEquals(
+            sameRepoEncoder.filePath,
+            ImagePipelineResolver.resolve(qwenImage, listOf(qwenImage, strayEncoder, sameRepoEncoder))
+                .pathOf(ImageComponent.LLM),
+        )
+        // With nothing but the stray one, it is not guessed at.
+        assertEquals(
+            "",
+            ImagePipelineResolver.resolve(qwenImage, listOf(qwenImage, strayEncoder))
+                .pathOf(ImageComponent.LLM),
+        )
+    }
+
+    @Test
+    fun `Qwen-Image asks for a vision-language encoder`() {
+        assertEquals(true, DiffusionArch.QWEN_IMAGE.acceptsEncoder("qwen2vl", 3584))
+        assertEquals(true, DiffusionArch.QWEN_IMAGE.acceptsEncoder("qwen3vl", 4096))
+        assertEquals(false, DiffusionArch.QWEN_IMAGE.acceptsEncoder("qwen3", 2560))
+        assertEquals(null, DiffusionArch.QWEN_IMAGE.acceptsEncoder(null, null))
     }
 
     @Test

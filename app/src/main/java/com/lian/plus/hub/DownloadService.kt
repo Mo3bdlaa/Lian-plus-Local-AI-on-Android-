@@ -284,7 +284,7 @@ class DownloadService : LifecycleService() {
             asset.files.forEach { file ->
                 DownloadCenter.enqueue(
                     DownloadJob(
-                        id = DownloadCenter.idFor(file.repoId, file.fileName),
+                        id = DownloadCenter.idFor(file.repoId, file.path),
                         url = file.downloadUrl,
                         fileName = file.fileName,
                         repoId = file.repoId,
@@ -296,7 +296,7 @@ class DownloadService : LifecycleService() {
                 )
             }
             asset.files.firstOrNull()?.let {
-                start(context, DownloadCenter.idFor(it.repoId, it.fileName))
+                start(context, DownloadCenter.idFor(it.repoId, it.path))
             }
         }
 
